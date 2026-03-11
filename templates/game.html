@@ -3,17 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mini Game Hub Base</title>
+    <title>Volleyball Mini Game</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   </head>
   <body class="subpage-body">
-    <main class="subpage-layout game-layout">
+    <main class="subpage-layout volleyball-layout">
       <header class="subpage-header">
-        <h1>Mini Game Hub Base</h1>
+        <h1>2인 캐주얼 배구</h1>
         <div class="subpage-stats">
           <span>닉네임: <strong id="game-name">-</strong></span>
           <span>HP: <strong id="game-hp">-</strong></span>
           <span>Coin: <strong id="game-coin">-</strong></span>
+          <span>세션: <strong id="game-session">-</strong></span>
         </div>
         <div class="subpage-actions">
           <a class="link-btn" href="/">로비 복귀</a>
@@ -21,31 +22,50 @@
         </div>
       </header>
 
-      <section class="subpage-content game-content">
-        <section class="tile">
-          <h2>세션 정보</h2>
-          <p>미니게임 세션 ID: <strong id="game-session">-</strong></p>
-          <p id="game-party">파티 정보 대기중</p>
+      <section class="volleyball-content">
+        <section class="volleyball-canvas-wrap">
+          <canvas id="volleyball-canvas" width="1280" height="720"></canvas>
+
+          <div id="volleyball-result-panel" class="volleyball-result-panel hidden">
+            <h2 id="volleyball-result-title">경기 종료</h2>
+            <p id="volleyball-result-score">0 : 0</p>
+            <p id="volleyball-result-coin">코인 정산</p>
+            <p id="volleyball-rematch-status" class="muted">재대결 대기</p>
+            <div class="volleyball-result-actions">
+              <button id="volleyball-rematch-btn" type="button">재대결</button>
+              <button id="volleyball-back-btn" type="button" class="ghost-btn">로비 복귀</button>
+            </div>
+          </div>
         </section>
 
-        <section class="tile">
-          <h2>코인 사용 슬롯</h2>
-          <p>입장비/베팅/보상 정산 로직을 연결할 영역입니다.</p>
-          <button id="coin-action" type="button">코인 사용 훅 테스트 (UI 전용)</button>
-          <div id="coin-log" class="feed short-feed"></div>
-        </section>
+        <aside class="volleyball-side-panel">
+          <section class="tile">
+            <h2>매치 상태</h2>
+            <p><strong id="volleyball-phase">준비중</strong></p>
+            <p id="volleyball-status" class="hint-text">세션 연결 대기</p>
+            <p><strong>스코어:</strong> <span id="volleyball-score">0 : 0</span></p>
+            <p id="game-party">파티 정보 대기중</p>
+          </section>
 
-        <section class="tile">
-          <h2>미니게임 연결 예정</h2>
-          <ul class="intro-list compact">
-            <li>우클릭 신청-수락으로 `/game` 진입</li>
-            <li>던전에서 얻은 코인 사용</li>
-            <li>실제 미니게임 콘텐츠는 분업 구현 예정</li>
-          </ul>
-        </section>
+          <section class="tile">
+            <h2>조작</h2>
+            <ul class="intro-list compact">
+              <li>좌우 이동: ← / →</li>
+              <li>점프: Space 또는 ↑</li>
+              <li>목표: 5점 선취</li>
+            </ul>
+          </section>
+
+          <section class="tile">
+            <h2>로그</h2>
+            <div id="volleyball-feed" class="feed short-feed"></div>
+          </section>
+        </aside>
       </section>
     </main>
 
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='minigames/volleyball.js') }}"></script>
     <script src="{{ url_for('static', filename='game.js') }}"></script>
   </body>
 </html>
