@@ -24,14 +24,19 @@
       <section class="subpage-content">
         <canvas id="dungeon-canvas" width="1280" height="720"></canvas>
         <aside class="subpage-panel">
-          <h2>던전 기반 상태</h2>
+          <h2>던전 서버 상태</h2>
+          <div id="dungeon-status" class="status-grid"></div>
+          <h2>몹 레퍼런스</h2>
+          <div id="dungeon-monster-list" class="monster-list"></div>
+          <h2>던전 로그</h2>
           <div id="dungeon-feed" class="feed"></div>
-          <p class="hint-text">몹 스폰/전투는 분업 구현 예정. 지금은 이동/점프/공격키 훅만 제공.</p>
-          <p class="hint-text">공격 예약 키: Z / X / C</p>
+          <p class="hint-text">몹은 서버 기준으로 저장되며, 페이지를 나갔다 와도 같은 던전 ID면 유지됩니다.</p>
+          <p class="hint-text">전투는 아직 미구현이며 공격 예약 키 훅만 연결됩니다: Z / X / C</p>
         </aside>
       </section>
     </main>
 
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="{{ url_for('static', filename='dungeon.js') }}"></script>
   </body>
 </html>

@@ -2,7 +2,7 @@ import os
 import threading
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
@@ -84,10 +84,138 @@ class PlayerRepository:
         return dict(self._local_profiles[key])
 
 
+class DungeonMonsterRepository:
+    def __init__(self) -> None:
+        self.enabled = False
+        self._local_monsters: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self.collection = None
+
+        mongo_uri = os.getenv("MONGODB_URI", "").strip()
+        db_name = os.getenv("MONGODB_DB", "meta_world")
+        collection_name = os.getenv("MONGODB_DUNGEON_COLLECTION", "dungeon_monsters")
+
+        if not mongo_uri or MongoClient is None:
+            print("[DungeonMonsterRepository] MongoDB disabled; using in-memory fallback.")
+            return
+
+        try:
+            client = MongoClient(mongo_uri, serverSelectionTimeoutMS=3000)
+            client.admin.command("ping")
+            self.collection = client[db_name][collection_name]
+            self.collection.create_index(
+                [("dungeon_id", 1), ("monster_id", 1)],
+                unique=True,
+            )
+            self.collection.create_index("dungeon_id")
+            self.enabled = True
+            print("[DungeonMonsterRepository] MongoDB connected.")
+        except Exception as exc:  # pragma: no cover - connection runtime issue
+            print(f"[DungeonMonsterRepository] MongoDB connection failed ({exc}); fallback enabled.")
+            self.enabled = False
+
+    @staticmethod
+    def _normalize_monster(raw: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "dungeon_id": str(raw.get("dungeon_id", "default_dungeon")),
+            "monster_id": str(raw.get("monster_id", "")),
+            "template_id": str(raw.get("template_id", "unknown")),
+            "name": str(raw.get("name", "Unknown Monster")),
+            "theme": str(raw.get("theme", "cute_side_scroll")),
+            "sprite_hint": str(raw.get("sprite_hint", "round")),
+            "x": float(raw.get("x", 0)),
+            "y": float(raw.get("y", 0)),
+            "spawn_x": float(raw.get("spawn_x", raw.get("x", 0))),
+            "spawn_y": float(raw.get("spawn_y", raw.get("y", 0))),
+            "hp": int(raw.get("hp", 1)),
+            "max_hp": int(raw.get("max_hp", raw.get("hp", 1))),
+            "level": int(raw.get("level", 1)),
+            "state": str(raw.get("state", "idle")),
+            "is_boss": bool(raw.get("is_boss", False)),
+            "move_range": float(raw.get("move_range", 90)),
+            "respawn_delay": float(raw.get("respawn_delay", 8.0)),
+            "created_at": float(raw.get("created_at", time.time())),
+            "updated_at": float(raw.get("updated_at", time.time())),
+            "last_seen_at": float(raw.get("last_seen_at", time.time())),
+        }
+
+    def list_by_dungeon(self, dungeon_id: str) -> List[Dict[str, Any]]:
+        if self.enabled and self.collection is not None:
+            docs = list(self.collection.find({"dungeon_id": dungeon_id}).sort("monster_id", 1))
+            if docs:
+                return [self._normalize_monster(doc) for doc in docs]
+
+        local_bucket = self._local_monsters.get(dungeon_id, {})
+        return [dict(local_bucket[key]) for key in sorted(local_bucket.keys())]
+
+    def seed_dungeon(self, dungeon_id: str, seeds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        existing = self.list_by_dungeon(dungeon_id)
+        if existing:
+            return existing
+
+        now_ts = time.time()
+        docs = []
+        for seed in seeds:
+            docs.append(
+                {
+                    "dungeon_id": dungeon_id,
+                    "monster_id": str(seed["monster_id"]),
+                    "template_id": str(seed["template_id"]),
+                    "name": str(seed["name"]),
+                    "theme": str(seed.get("theme", "cute_side_scroll")),
+                    "sprite_hint": str(seed.get("sprite_hint", "round")),
+                    "x": float(seed["x"]),
+                    "y": float(seed["y"]),
+                    "spawn_x": float(seed.get("spawn_x", seed["x"])),
+                    "spawn_y": float(seed.get("spawn_y", seed["y"])),
+                    "hp": int(seed["hp"]),
+                    "max_hp": int(seed.get("max_hp", seed["hp"])),
+                    "level": int(seed.get("level", 1)),
+                    "state": str(seed.get("state", "idle")),
+                    "is_boss": bool(seed.get("is_boss", False)),
+                    "move_range": float(seed.get("move_range", 90)),
+                    "respawn_delay": float(seed.get("respawn_delay", 8.0)),
+                    "created_at": now_ts,
+                    "updated_at": now_ts,
+                    "last_seen_at": now_ts,
+                }
+            )
+
+        if self.enabled and self.collection is not None:
+            try:
+                self.collection.insert_many(docs, ordered=False)
+            except PyMongoError:
+                pass
+            return self.list_by_dungeon(dungeon_id)
+
+        bucket = self._local_monsters.setdefault(dungeon_id, {})
+        for doc in docs:
+            bucket[doc["monster_id"]] = dict(doc)
+        return self.list_by_dungeon(dungeon_id)
+
+    def touch_dungeon(self, dungeon_id: str) -> None:
+        now_ts = time.time()
+        if self.enabled and self.collection is not None:
+            try:
+                self.collection.update_many(
+                    {"dungeon_id": dungeon_id},
+                    {"$set": {"last_seen_at": now_ts}},
+                )
+            except PyMongoError:
+                pass
+            return
+
+        if dungeon_id not in self._local_monsters:
+            return
+
+        for monster in self._local_monsters[dungeon_id].values():
+            monster["last_seen_at"] = now_ts
+
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret")
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 player_repository = PlayerRepository()
+dungeon_repository = DungeonMonsterRepository()
 
 WORLD = {
     "width": 2800,
@@ -100,6 +228,83 @@ WORLD = {
         "h": 140,
         "target": "/dungeon",
     },
+}
+
+DUNGEON_WORLD = {
+    "width": 2800,
+    "height": 1400,
+    "spawn": {"x": 420, "y": 520},
+    "id": "default_dungeon",
+}
+
+DUNGEON_MONSTER_SEEDS: Dict[str, List[Dict[str, Any]]] = {
+    "default_dungeon": [
+        {
+            "monster_id": "mint-slime-001",
+            "template_id": "mint_slime",
+            "name": "민트 슬라임",
+            "theme": "cute_forest",
+            "sprite_hint": "slime",
+            "x": 560,
+            "y": 1320,
+            "hp": 36,
+            "max_hp": 36,
+            "level": 1,
+            "move_range": 88,
+        },
+        {
+            "monster_id": "pom-mushroom-001",
+            "template_id": "pom_mushroom",
+            "name": "폼폼 머쉬룸",
+            "theme": "cute_forest",
+            "sprite_hint": "mushroom",
+            "x": 1010,
+            "y": 1320,
+            "hp": 45,
+            "max_hp": 45,
+            "level": 2,
+            "move_range": 74,
+        },
+        {
+            "monster_id": "cloud-pupu-001",
+            "template_id": "cloud_pupu",
+            "name": "구름 푸푸",
+            "theme": "dreamy_cloud",
+            "sprite_hint": "puff",
+            "x": 1500,
+            "y": 940,
+            "hp": 52,
+            "max_hp": 52,
+            "level": 3,
+            "move_range": 110,
+        },
+        {
+            "monster_id": "honey-sprout-001",
+            "template_id": "honey_sprout",
+            "name": "허니 스프라우트",
+            "theme": "flower_garden",
+            "sprite_hint": "sprout",
+            "x": 1880,
+            "y": 1320,
+            "hp": 58,
+            "max_hp": 58,
+            "level": 3,
+            "move_range": 96,
+        },
+        {
+            "monster_id": "acorn-bat-001",
+            "template_id": "acorn_bat",
+            "name": "도토리 박쥐",
+            "theme": "twilight_cute",
+            "sprite_hint": "bat",
+            "x": 2320,
+            "y": 900,
+            "hp": 72,
+            "max_hp": 72,
+            "level": 4,
+            "move_range": 132,
+        },
+    ]
 }
 
 players: Dict[str, Dict[str, Any]] = {}
@@ -170,8 +375,53 @@ def sanitize_nickname(raw_name: Any) -> str:
     return nickname[:16]
 
 
+def sanitize_dungeon_id(raw_dungeon_id: Any) -> str:
+    candidate = str(raw_dungeon_id or "").strip().lower()
+    if not candidate:
+        return "default_dungeon"
+
+    sanitized = "".join(ch for ch in candidate if ch.isalnum() or ch in {"_", "-"})
+    return sanitized[:40] or "default_dungeon"
+
+
 def find_player(sid: str) -> Optional[Dict[str, Any]]:
     return players.get(sid)
+
+
+def dungeon_seed_for(dungeon_id: str) -> List[Dict[str, Any]]:
+    return DUNGEON_MONSTER_SEEDS.get(dungeon_id, DUNGEON_MONSTER_SEEDS["default_dungeon"])
+
+
+def safe_monster_view(monster: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "monster_id": monster["monster_id"],
+        "template_id": monster["template_id"],
+        "name": monster["name"],
+        "theme": monster["theme"],
+        "sprite_hint": monster["sprite_hint"],
+        "x": monster["x"],
+        "y": monster["y"],
+        "spawn_x": monster["spawn_x"],
+        "spawn_y": monster["spawn_y"],
+        "hp": monster["hp"],
+        "max_hp": monster["max_hp"],
+        "level": monster["level"],
+        "state": monster["state"],
+        "is_boss": monster["is_boss"],
+        "move_range": monster["move_range"],
+        "respawn_delay": monster["respawn_delay"],
+        "updated_at": monster["updated_at"],
+        "last_seen_at": monster["last_seen_at"],
+    }
+
+
+def make_dungeon_snapshot(dungeon_id: str) -> Dict[str, Any]:
+    monsters = dungeon_repository.list_by_dungeon(dungeon_id)
+    return {
+        "timestamp": time.time(),
+        "dungeon_id": dungeon_id,
+        "monsters": [safe_monster_view(monster) for monster in monsters],
+    }
 
 
 @app.route("/")
@@ -187,6 +437,59 @@ def dungeon() -> str:
 @app.route("/game")
 def game() -> str:
     return render_template("game.html")
+
+
+@socketio.on("join_dungeon")
+def on_join_dungeon(data: Dict[str, Any]) -> None:
+    dungeon_id = sanitize_dungeon_id((data or {}).get("dungeon_id"))
+    dungeon_repository.seed_dungeon(dungeon_id, dungeon_seed_for(dungeon_id))
+    dungeon_repository.touch_dungeon(dungeon_id)
+
+    emit(
+        "dungeon_joined",
+        {
+            "dungeon_id": dungeon_id,
+            "world": {**DUNGEON_WORLD, "id": dungeon_id},
+            "snapshot": make_dungeon_snapshot(dungeon_id),
+            "keywords": {
+                "spawn_manager": True,
+                "wave_timer": "pending",
+                "combat_authoritative_server": True,
+                "damage_confirm": "pending",
+                "death_respawn": "pending",
+                "clear_fail_condition": "pending",
+                "reward_confirm": "pending",
+                "monster_persistence": "server",
+            },
+        },
+    )
+
+
+@socketio.on("request_dungeon_snapshot")
+def on_request_dungeon_snapshot(data: Dict[str, Any]) -> None:
+    dungeon_id = sanitize_dungeon_id((data or {}).get("dungeon_id"))
+    dungeon_repository.seed_dungeon(dungeon_id, dungeon_seed_for(dungeon_id))
+    dungeon_repository.touch_dungeon(dungeon_id)
+    emit("dungeon_snapshot", make_dungeon_snapshot(dungeon_id))
+
+
+@socketio.on("dungeon_action_request")
+def on_dungeon_action_request(data: Dict[str, Any]) -> None:
+    payload = data or {}
+    action_key = str(payload.get("action_key", "")).strip().upper()
+    if action_key not in {"KEYZ", "KEYX", "KEYC"}:
+        return
+
+    emit(
+        "dungeon_action_queued",
+        {
+            "dungeon_id": sanitize_dungeon_id(payload.get("dungeon_id")),
+            "action_key": action_key,
+            "status": "placeholder",
+            "server_authoritative": True,
+            "message": f"{action_key} 입력이 서버 전투 훅에 예약되었습니다.",
+        },
+    )
 
 
 @socketio.on("join_lobby")

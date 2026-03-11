@@ -75,6 +75,20 @@
   - payload: `{ session_id, players: [{id, nickname}, ...] }`
 - `minigame_invite_declined` (server -> requester)
 
+### 2.4 던전 몹 영속화/전투 훅
+- `join_dungeon` (client -> server)
+  - payload: `{ dungeon_id }`
+- `dungeon_joined` (server -> client)
+  - payload: `{ dungeon_id, world, snapshot, keywords }`
+- `request_dungeon_snapshot` (client -> server)
+  - payload: `{ dungeon_id }`
+- `dungeon_snapshot` (server -> client)
+  - payload: `{ timestamp, dungeon_id, monsters }`
+- `dungeon_action_request` (client -> server)
+  - payload: `{ dungeon_id, action_key, player }`
+- `dungeon_action_queued` (server -> client)
+  - payload: `{ dungeon_id, action_key, status, server_authoritative, message }`
+
 ## 3) 분업 시 필수 고려사항
 
 ### 3.1 공통 규칙
@@ -134,6 +148,28 @@
   - run_id, players, started_at, ended_at, rewards
 - `minigame_sessions`
   - session_id, players, game_type, entry_fee, result
+
+### 4.3 dungeon_monsters 컬렉션(현재 뼈대)
+- `dungeon_id: string`
+- `monster_id: string (dungeon 내 unique)`
+- `template_id: string`
+- `name: string`
+- `theme: string`
+- `sprite_hint: string`
+- `x: float`
+- `y: float`
+- `spawn_x: float`
+- `spawn_y: float`
+- `hp: int`
+- `max_hp: int`
+- `level: int`
+- `state: string`
+- `is_boss: bool`
+- `move_range: float`
+- `respawn_delay: float`
+- `created_at: float(timestamp)`
+- `updated_at: float(timestamp)`
+- `last_seen_at: float(timestamp)`
 
 ## 5) 지금 바로 이어서 작업할 때 권장 순서
 1. 백엔드 팀: 던전 전투 이벤트 계약 먼저 확정

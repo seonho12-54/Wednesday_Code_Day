@@ -334,6 +334,49 @@ button,
   line-height: 1.32;
 }
 
+.status-grid,
+.monster-list {
+  display: grid;
+  gap: 8px;
+}
+
+.status-pill,
+.monster-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffffd9;
+  padding: 10px 11px;
+}
+
+.status-pill strong,
+.monster-card strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.status-pill span,
+.monster-card span {
+  display: block;
+  font-size: 0.88rem;
+  line-height: 1.35;
+  opacity: 0.88;
+}
+
+.monster-card {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.monster-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid #00000014;
+  margin-top: 2px;
+}
+
 .game-layout .subpage-content {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
