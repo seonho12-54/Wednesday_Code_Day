@@ -313,7 +313,7 @@ DUNGEON_MONSTER_SEEDS: Dict[str, List[Dict[str, Any]]] = {
         {
             "monster_id": "mint-slime-001",
             "template_id": "mint_slime",
-            "name": "민트 슬라임",
+            "name": "Mint Slime",
             "theme": "cute_forest",
             "sprite_hint": "slime",
             "x": 560,
@@ -326,7 +326,7 @@ DUNGEON_MONSTER_SEEDS: Dict[str, List[Dict[str, Any]]] = {
         {
             "monster_id": "pom-mushroom-001",
             "template_id": "pom_mushroom",
-            "name": "폼폼 머쉬룸",
+            "name": "Pom Mushroom",
             "theme": "cute_forest",
             "sprite_hint": "mushroom",
             "x": 1010,
@@ -339,7 +339,7 @@ DUNGEON_MONSTER_SEEDS: Dict[str, List[Dict[str, Any]]] = {
         {
             "monster_id": "cloud-pupu-001",
             "template_id": "cloud_pupu",
-            "name": "구름 푸푸",
+            "name": "Cloud Pupu",
             "theme": "dreamy_cloud",
             "sprite_hint": "puff",
             "x": 1500,
@@ -352,7 +352,7 @@ DUNGEON_MONSTER_SEEDS: Dict[str, List[Dict[str, Any]]] = {
         {
             "monster_id": "honey-sprout-001",
             "template_id": "honey_sprout",
-            "name": "허니 스프라우트",
+            "name": "Honey Sprout",
             "theme": "flower_garden",
             "sprite_hint": "sprout",
             "x": 1880,
@@ -365,7 +365,7 @@ DUNGEON_MONSTER_SEEDS: Dict[str, List[Dict[str, Any]]] = {
         {
             "monster_id": "acorn-bat-001",
             "template_id": "acorn_bat",
-            "name": "도토리 박쥐",
+            "name": "Acorn Bat",
             "theme": "twilight_cute",
             "sprite_hint": "bat",
             "x": 2320,
@@ -436,6 +436,8 @@ def safe_player_view(player: Dict[str, Any], now_ts: float) -> Dict[str, Any]:
     return {
         "id": player["id"],
         "nickname": player["nickname"],
+        "hp": player["hp"],
+        "max_hp": max(100, int(player["hp"])),
         "x": player["x"],
         "y": player["y"],
         "vx": player["vx"],
@@ -961,7 +963,7 @@ def dev_grant_coin() -> Any:
             for sid, p in players.items():
                 if p.get("nickname") == nickname:
                     p["coin"] = coin
-                    emit("system_notice", {"message": f"[DEV] 코인 지급: {nickname} +{amount}"}, room=sid)
+                    emit("system_notice", {"message": f"[DEV] Coin granted: {nickname} +{amount}"}, room=sid)
             updated.append({"nickname": nickname, "coin": coin})
 
     return jsonify(
@@ -970,7 +972,7 @@ def dev_grant_coin() -> Any:
             "amount": amount,
             "targets": updated,
             "count": len(updated),
-            "note": "nickname 미지정 시 현재 접속 중인 플레이어 전체에 지급",
+            "note": "If no nickname is provided, coins are granted to all connected players.",
         }
     )
 
@@ -1023,7 +1025,7 @@ def on_dungeon_action_request(data: Dict[str, Any]) -> None:
             "action_key": action_key,
             "status": "placeholder",
             "server_authoritative": True,
-            "message": f"{action_key} 입력이 서버 전투 훅에 예약되었습니다.",
+            "message": f"{action_key} was queued on the server combat hook.",
         },
     )
 
@@ -1070,7 +1072,7 @@ def on_join_lobby(data: Dict[str, Any]) -> None:
     )
     emit(
         "system_notice",
-        {"message": f"{nickname} 님이 로비에 입장했습니다."},
+        {"message": f"{nickname} joined the lobby."},
         broadcast=True,
         include_self=False,
     )
@@ -1200,7 +1202,7 @@ def on_minigame_invite(data: Dict[str, Any]) -> None:
         if distance > 220:
             emit(
                 "system_notice",
-                {"message": "미니게임 신청은 가까운 플레이어에게만 보낼 수 있습니다."},
+                {"message": "You can only invite nearby players to a minigame."},
                 room=sid,
             )
             return
@@ -1221,7 +1223,7 @@ def on_minigame_invite(data: Dict[str, Any]) -> None:
     )
     emit(
         "system_notice",
-        {"message": f"{target['nickname']} 님에게 미니게임 신청을 보냈습니다."},
+        {"message": f"Sent a minigame invite to {target['nickname']}."},
         room=sid,
     )
 
@@ -1307,13 +1309,13 @@ def on_volley_join_session(data: Dict[str, Any]) -> None:
     nickname = sanitize_nickname(payload.get("nickname"))
     sid = request.sid
     if not session_id or not nickname:
-        emit("volley_error", {"message": "세션 정보가 올바르지 않습니다."})
+        emit("volley_error", {"message": "The session payload is invalid."})
         return
 
     with state_lock:
         session = minigame_sessions.get(session_id)
         if session is None or session.get("type") != "volley":
-            emit("volley_error", {"message": "유효하지 않은 배구 세션입니다."}, room=sid)
+            emit("volley_error", {"message": "This volleyball session is not valid."}, room=sid)
             return
 
         side = None
@@ -1322,7 +1324,7 @@ def on_volley_join_session(data: Dict[str, Any]) -> None:
                 side = side_key
                 break
         if side is None:
-            emit("volley_error", {"message": "이 세션의 참여자가 아닙니다."}, room=sid)
+            emit("volley_error", {"message": "You are not a participant in this session."}, room=sid)
             return
 
         prev_sid = session["sid_by_side"].get(side, "")
@@ -1365,7 +1367,7 @@ def on_volley_join_session(data: Dict[str, Any]) -> None:
                 session["status"] = "cancelled"
                 emit(
                     "volley_error",
-                    {"message": "두 플레이어 모두 10코인이 있어야 시작할 수 있습니다."},
+                    {"message": "Both players need 10 coins to start."},
                     room=session_id,
                 )
                 return
@@ -1474,7 +1476,7 @@ def on_disconnect() -> None:
     emit("player_left", {"id": sid}, broadcast=True)
     emit(
         "system_notice",
-        {"message": f"{leaving['nickname']} 님이 퇴장했습니다."},
+        {"message": f"{leaving['nickname']} left the lobby."},
         broadcast=True,
     )
 

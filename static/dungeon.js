@@ -1,4 +1,4 @@
-﻿(() => {
+(() => {
   const canvas = document.getElementById("dungeon-canvas");
   if (!canvas) {
     return;
@@ -87,7 +87,7 @@
     width: 2800,
     height: 1400,
     spawn: { x: 420, y: 520 },
-    returnPortal: { x: 150, y: 460, w: 120, h: 148, target: "/" },
+    returnPortal: { x: 180, y: 1172, w: 120, h: 148, target: "/" },
     id: dungeonId,
   };
 
@@ -1437,6 +1437,7 @@
 
   requestAnimationFrame(gameLoop);
 })();
+
 
 
 

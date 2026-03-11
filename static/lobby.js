@@ -1,4 +1,4 @@
-﻿(() => {
+(() => {
   const canvas = document.getElementById("game-canvas");
   const ctx = canvas.getContext("2d");
 
@@ -244,7 +244,7 @@
 
     const thread = privateThreads.get(activePrivateTargetId);
     privateChatEl.classList.remove("hidden");
-    pmTitle.textContent = `1:1 ???- ${thread.nickname}`;
+    pmTitle.textContent = `Private Chat - ${thread.nickname}`;
     pmFeed.innerHTML = "";
 
     thread.messages.forEach((msg) => {
@@ -280,7 +280,7 @@
   function showInviteModal(fromId, fromName) {
     pendingInvite.fromId = fromId;
     pendingInvite.fromName = fromName;
-    inviteText.textContent = `${fromName} ?섏씠 誘몃땲寃뚯엫???좎껌?덉뒿?덈떎.`;
+    inviteText.textContent = `${fromName} sent you a minigame invite.`;
     inviteModal.classList.remove("hidden");
     inviteModal.classList.add("show");
   }
@@ -450,7 +450,7 @@
       player.y = world.spawn.y;
       player.vx = 0;
       player.vy = 0;
-      addFeedLine("濡쒕퉬 諛붽묑?쇰줈 踰쀬뼱??以묒븰?쇰줈 蹂듦??덉뒿?덈떎.", "system");
+      addFeedLine("You left the safe zone, so you were moved back to the center of the lobby.", "system");
     }
 
     const pr = portalRect();
@@ -463,7 +463,7 @@
     if (interactQueued) {
       interactQueued = false;
       if (inPortalRange) {
-        addFeedLine("?섏쟾?쇰줈 ?대룞?⑸땲??", "system");
+        addFeedLine("Entering the dungeon.", "system");
         enterDungeonFromPortal();
         return;
       }
@@ -762,7 +762,7 @@
       ctx.fillStyle = "#fff";
       ctx.textAlign = "center";
       ctx.font = "15px Pretendard, Noto Sans KR, sans-serif";
-      ctx.fillText("???ㅻ? ?뚮윭 ?섏쟾 ?낆옣", p.x + p.w * 0.5, p.y - 42);
+      ctx.fillText("Press Up to enter the dungeon", p.x + p.w * 0.5, p.y - 42);
     }
 
     ctx.restore();
@@ -924,7 +924,6 @@
     }
 
     render();
-    syncPlayerStatsUi();
     requestAnimationFrame(gameLoop);
   }
 
@@ -965,7 +964,7 @@
     }
 
     startScreen.classList.remove("show");
-    addFeedLine("濡쒕퉬 ?낆옣 ?꾨즺. Enter濡?梨꾪똿, ?ы깉 ?꾩뿉???묐줈 ?섏쟾 ?대룞.", "system");
+    addFeedLine("Lobby ready. Press Enter to chat and Up at the portal to enter the dungeon.", "system");
   });
 
   socket.on("disconnect", () => {
@@ -1009,7 +1008,7 @@
   });
 
   socket.on("friend_added", ({ friend_id, friend_nickname }) => {
-    addFeedLine(`${friend_nickname} ?섍낵 移쒓뎄媛 ?섏뿀?듬땲??`, "system");
+    addFeedLine(`${friend_nickname} is now on your friend list.`, "system");
     if (!privateThreads.has(friend_id)) {
       privateThreads.set(friend_id, { nickname: friend_nickname, messages: [] });
     }
@@ -1037,7 +1036,7 @@
   });
 
   socket.on("minigame_invite_declined", ({ nickname }) => {
-    addFeedLine(`${nickname} ?섏씠 誘몃땲寃뚯엫 ?좎껌??嫄곗젅?덉뒿?덈떎.`, "system");
+    addFeedLine(`${nickname} declined the minigame invite.`, "system");
   });
 
   socket.on("minigame_start", (payload) => {
@@ -1060,7 +1059,7 @@
 
     if (!target) {
       hideContextMenu();
-      addFeedLine("?뚮젅?댁뼱 媛源뚯씠?먯꽌 ?고겢由?븯硫??곹샇?묒슜?????덉뒿?덈떎.", "system");
+      addFeedLine("Right-click a nearby player to open the interaction menu.", "system");
       return;
     }
 
@@ -1255,7 +1254,7 @@
   if (storedNickname) {
     nicknameInput.value = storedNickname;
     startScreen.classList.remove("show");
-    addFeedLine("??λ맂 ?됰꽕?꾩쑝濡??먮룞 ?낆옣 以?..", "system");
+    addFeedLine("Auto-joining the lobby with your saved nickname.", "system");
     requestJoinLobby(storedNickname);
   }
 
@@ -1263,6 +1262,7 @@
 
   requestAnimationFrame(gameLoop);
 })();
+
 
 
 
