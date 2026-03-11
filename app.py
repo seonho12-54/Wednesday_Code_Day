@@ -822,6 +822,36 @@ def reset_volley_round(
     session["players_state"]["right"] = create_volley_player("right", session["nick_by_side"]["right"])
 
 
+def start_volley_countdown(session: Dict[str, Any]) -> None:
+    session["bets_locked"] = True
+    session["status"] = "countdown"
+    session["scores"] = {"left": 0, "right": 0}
+    session["countdown_seconds"] = 5
+    session["countdown_until"] = time.time() + float(session["countdown_seconds"])
+    session["countdown_remaining"] = int(session["countdown_seconds"])
+    session["settled"] = False
+    session["winner_side"] = ""
+    session["winner_nickname"] = ""
+    session["match_end_payload"] = None
+    session["end_emitted"] = False
+    session["rematch_requests"] = {"left": False, "right": False}
+    reset_volley_round(session, launch_immediately=False)
+
+
+def build_volley_start_payload(session: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "session_id": session["session_id"],
+        "entry_fee": VOLLEY_ENTRY_FEE,
+        "target_score": VOLLEY_WIN_SCORE,
+        "pot": VOLLEY_POT,
+        "status": session["status"],
+        "countdown_seconds": int(session.get("countdown_seconds", 0)),
+        "countdown_remaining": int(session.get("countdown_remaining", 0)),
+        "scores": dict(session["scores"]),
+        "side_nicknames": dict(session["nick_by_side"]),
+    }
+
+
 def _finish_volley_match(session: Dict[str, Any], winner_side: str, reason: str) -> None:
     if session.get("settled", False):
         return
@@ -833,6 +863,7 @@ def _finish_volley_match(session: Dict[str, Any], winner_side: str, reason: str)
 
     session["status"] = "finished"
     session["settled"] = True
+    session["rematch_requests"] = {"left": False, "right": False}
     session["winner_side"] = winner_side
     session["winner_nickname"] = winner_nickname
     session["match_end_payload"] = {
@@ -1523,6 +1554,7 @@ def on_minigame_invite_response(data: Dict[str, Any]) -> None:
         "settled": False,
         "match_end_payload": None,
         "end_emitted": False,
+        "rematch_requests": {"left": False, "right": False},
     }
 
     payload = {
@@ -1568,7 +1600,8 @@ def on_volley_join_session(data: Dict[str, Any]) -> None:
             volley_connections.pop(prev_sid, None)
 
         session["sid_by_side"][side] = sid
-        session["status"] = "waiting_join"
+        if session.get("status") not in {"playing", "countdown", "finished"}:
+            session["status"] = "waiting_join"
         volley_connections[sid] = {"session_id": session_id, "side": side}
         socketio.server.enter_room(sid, session_id, namespace="/")
 
@@ -1587,13 +1620,7 @@ def on_volley_join_session(data: Dict[str, Any]) -> None:
             right_lock = player_repository.try_lock_entry_fee(right_nickname, VOLLEY_ENTRY_FEE)
 
             if left_lock.get("ok") and right_lock.get("ok"):
-                session["bets_locked"] = True
-                session["status"] = "countdown"
-                session["scores"] = {"left": 0, "right": 0}
-                session["countdown_seconds"] = 5
-                session["countdown_until"] = time.time() + float(session["countdown_seconds"])
-                session["countdown_remaining"] = int(session["countdown_seconds"])
-                reset_volley_round(session, launch_immediately=False)
+                start_volley_countdown(session)
                 ready_to_start = True
             else:
                 if left_lock.get("ok"):
@@ -1627,17 +1654,7 @@ def on_volley_join_session(data: Dict[str, Any]) -> None:
         if ready_to_start:
             emit(
                 "volley_start",
-                {
-                    "session_id": session_id,
-                    "entry_fee": VOLLEY_ENTRY_FEE,
-                    "target_score": VOLLEY_WIN_SCORE,
-                    "pot": VOLLEY_POT,
-                    "status": session["status"],
-                    "countdown_seconds": int(session.get("countdown_seconds", 0)),
-                    "countdown_remaining": int(session.get("countdown_remaining", 0)),
-                    "scores": dict(session["scores"]),
-                    "side_nicknames": dict(session["nick_by_side"]),
-                },
+                build_volley_start_payload(session),
                 room=session_id,
             )
         else:
@@ -1671,6 +1688,85 @@ def on_volley_input(data: Dict[str, Any]) -> None:
         player["input"]["jump"] = bool(payload.get("jump", False))
 
 
+@socketio.on("volley_rematch_request")
+def on_volley_rematch_request(data: Dict[str, Any]) -> None:
+    sid = request.sid
+    status_emit: Optional[Dict[str, Any]] = None
+    start_emit: Optional[Dict[str, Any]] = None
+    error_emit: Optional[Dict[str, Any]] = None
+    room_id: Optional[str] = None
+
+    with state_lock:
+        connection = volley_connections.get(sid)
+        if connection is None:
+            emit("volley_error", {"message": "Rematch request is not available."}, room=sid)
+            return
+
+        session = minigame_sessions.get(connection["session_id"])
+        if session is None or session.get("type") != "volley":
+            emit("volley_error", {"message": "This volleyball session is not valid."}, room=sid)
+            return
+
+        room_id = session["session_id"]
+        side = connection["side"]
+        opposite_side = "right" if side == "left" else "left"
+        if not session["sid_by_side"].get(opposite_side):
+            emit("volley_error", {"message": "Opponent is not connected for a rematch."}, room=sid)
+            return
+
+        if session.get("status") != "finished":
+            emit("volley_error", {"message": "Rematch is available after the current match ends."}, room=sid)
+            return
+
+        rematch_requests = session.setdefault("rematch_requests", {"left": False, "right": False})
+        rematch_requests[side] = True
+        status_emit = {
+            "session_id": room_id,
+            "requested_sides": dict(rematch_requests),
+            "requested_by": side,
+            "requester_nickname": session["nick_by_side"].get(side, side),
+            "started": False,
+        }
+
+        if rematch_requests.get("left") and rematch_requests.get("right"):
+            left_nickname = session["nick_by_side"]["left"]
+            right_nickname = session["nick_by_side"]["right"]
+            left_lock = player_repository.try_lock_entry_fee(left_nickname, VOLLEY_ENTRY_FEE)
+            right_lock = player_repository.try_lock_entry_fee(right_nickname, VOLLEY_ENTRY_FEE)
+
+            if left_lock.get("ok") and right_lock.get("ok"):
+                start_volley_countdown(session)
+                status_emit = {
+                    "session_id": room_id,
+                    "requested_sides": {"left": False, "right": False},
+                    "requested_by": "",
+                    "requester_nickname": "",
+                    "started": True,
+                }
+                start_emit = build_volley_start_payload(session)
+            else:
+                if left_lock.get("ok"):
+                    player_repository.add_coin(left_nickname, VOLLEY_ENTRY_FEE)
+                if right_lock.get("ok"):
+                    player_repository.add_coin(right_nickname, VOLLEY_ENTRY_FEE)
+                session["rematch_requests"] = {"left": False, "right": False}
+                status_emit = {
+                    "session_id": room_id,
+                    "requested_sides": {"left": False, "right": False},
+                    "requested_by": "",
+                    "requester_nickname": "",
+                    "started": False,
+                }
+                error_emit = {"message": "Both players need 10 coins to start a rematch."}
+
+    if room_id and status_emit:
+        emit("volley_rematch_status", status_emit, room=room_id)
+    if room_id and error_emit:
+        emit("volley_error", error_emit, room=room_id)
+    if room_id and start_emit:
+        emit("volley_start", start_emit, room=room_id)
+
+
 @socketio.on("disconnect")
 def on_disconnect() -> None:
     sid = request.sid
@@ -1682,6 +1778,7 @@ def on_disconnect() -> None:
             if session and session.get("type") == "volley":
                 side = connection["side"]
                 session["sid_by_side"][side] = ""
+                session.setdefault("rematch_requests", {"left": False, "right": False})[side] = False
                 if session.get("status") == "playing" and not session.get("settled"):
                     winner_side = "right" if side == "left" else "left"
                     _finish_volley_match(session, winner_side, "opponent_disconnect")

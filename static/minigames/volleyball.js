@@ -233,6 +233,7 @@
     let phase = "connecting";
     let mySide = null;
     let state = null;
+    let rematchRequested = false;
 
     let handlersBound = false;
     let connectedAt = Date.now();
@@ -340,6 +341,7 @@
         onPhase(payload.status === "countdown" ? "카운트다운" : "진행중");
         onStatus(payload.status === "countdown" ? "경기 시작 카운트다운" : "실시간 매치 진행중");
         onFeed("배구 매치 시작", "system");
+        rematchRequested = false;
 
         setScoreFromState(state);
       });
@@ -445,6 +447,34 @@
           mySide,
           mode: "network",
         });
+        rematchRequested = false;
+      });
+
+      socket.on("volley_rematch_status", (payload) => {
+        if (!payload || payload.session_id !== sessionId || mode !== "network") {
+          return;
+        }
+
+        const requested = payload.requested_sides || {};
+        const oppositeSide = mySide === "left" ? "right" : "left";
+        const myRequested = mySide ? Boolean(requested[mySide]) : false;
+        const oppositeRequested = mySide ? Boolean(requested[oppositeSide]) : false;
+        rematchRequested = myRequested;
+
+        if (payload.started) {
+          onStatus("재대결 성사: 새 경기 카운트다운 시작");
+          onFeed("양쪽 수락 완료. 재대결 시작", "system");
+          return;
+        }
+
+        if (myRequested && oppositeRequested) {
+          onStatus("양쪽 재대결 수락 완료. 시작 대기 중");
+        } else if (myRequested) {
+          onStatus("재대결 요청 전송됨. 상대 수락 대기 중");
+        } else if (oppositeRequested) {
+          onStatus("상대가 재대결 요청함. 재대결 버튼으로 수락하세요");
+          onFeed(`${payload.requester_nickname || "상대"}가 재대결을 요청했습니다.`, "system");
+        }
       });
 
       handlersBound = true;
@@ -460,6 +490,7 @@
       socket.off("volley_start");
       socket.off("volley_state");
       socket.off("volley_match_end");
+      socket.off("volley_rematch_status");
       handlersBound = false;
     }
 
@@ -793,13 +824,27 @@
 
     function requestRematch() {
       if (phase !== "finished") {
-        return;
+        onStatus("경기 종료 후에만 재대결을 요청할 수 있습니다.");
+        return false;
       }
 
       if (mode === "network") {
-        onStatus("재대결은 아직 미지원입니다.");
+        if (!sessionId) {
+          onStatus("세션 정보가 없어 재대결 요청을 보낼 수 없습니다.");
+          return false;
+        }
+        if (rematchRequested) {
+          onStatus("이미 재대결 요청을 보냈습니다.");
+          return false;
+        }
+        socket.emit("volley_rematch_request", { session_id: sessionId });
+        rematchRequested = true;
+        onStatus("재대결 요청 전송 중...");
+        onFeed("재대결 요청을 보냈습니다.", "system");
+        return true;
       } else {
         startDemo("데모 재대결 시작");
+        return true;
       }
     }
 

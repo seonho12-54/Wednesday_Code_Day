@@ -142,8 +142,8 @@
   }
 
   rematchBtn.addEventListener("click", () => {
-    runtime.requestRematch();
-    rematchStatus.textContent = "재대결 요청 전송";
+    const requested = runtime.requestRematch();
+    rematchStatus.textContent = requested ? "재대결 요청 전송" : "요청 조건 확인 필요";
   });
 
   backBtn.addEventListener("click", () => {

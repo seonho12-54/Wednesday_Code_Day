@@ -110,3 +110,21 @@ TODO / Suggestions for next agent:
     - 대상자 10 미만: 초대 차단.
     - 수락자 10 미만: 수락 차단, `minigame_start` 미발생.
   - Playwright 스크린샷(`output/web-volley-ui-check/shot-0.png`)에서 좌/우 대형 점수 UI 확인.
+
+- 재대결 기능 구현(Volley):
+  - 서버 `volley_rematch_request` 이벤트 추가.
+  - 경기 종료(`status=finished`) 후 양쪽이 재대결 요청하면 다시 각 10코인 베팅 후 5초 카운트다운으로 재시작.
+  - 한쪽만 요청 시 상대에게 수락 대기 상태를 `volley_rematch_status`로 브로드캐스트.
+  - 재대결 코인 부족 시 요청 초기화 + 에러 브로드캐스트.
+  - 재연결 시 기존 `finished` 상태를 `waiting_join`으로 덮어쓰지 않도록 보정.
+- 클라이언트 `static/minigames/volleyball.js`:
+  - `volley_rematch_status` 수신 처리 추가.
+  - `requestRematch()`에서 네트워크 모드 실제 emit 수행(`volley_rematch_request`).
+  - 중복 요청 방지 및 상태 메시지 개선.
+- `static/game.js`:
+  - 재대결 버튼 클릭 시 요청 성공/실패에 따라 상태 문구 분기.
+- 검증:
+  - 문법 체크 통과(`app.py`, `static/minigames/volleyball.js`, `static/game.js`).
+  - Socket.IO 테스트 클라이언트 2개로 재대결 E2E 확인:
+    - 1차 요청: 양쪽 `volley_rematch_status` 수신.
+    - 2차 요청: 양쪽 `volley_start` 수신(카운트다운 재시작).
