@@ -6,6 +6,8 @@
   const joinForm = document.getElementById("join-form");
   const nicknameInput = document.getElementById("nickname-input");
   const myNameEl = document.getElementById("my-name");
+  const myHpEl = document.getElementById("my-hp");
+  const myCoinEl = document.getElementById("my-coin");
 
   const chatInputWrap = document.getElementById("chat-input-wrap");
   const chatInput = document.getElementById("chat-input");
@@ -20,26 +22,50 @@
   const contextMenu = document.getElementById("context-menu");
   const friendBtn = document.getElementById("friend-btn");
   const pmBtn = document.getElementById("pm-btn");
+  const minigameBtn = document.getElementById("minigame-btn");
+
+  const inviteModal = document.getElementById("invite-modal");
+  const inviteText = document.getElementById("invite-text");
+  const inviteAcceptBtn = document.getElementById("invite-accept");
+  const inviteDeclineBtn = document.getElementById("invite-decline");
 
   const socket = io();
 
   const FIXED_DT = 1 / 60;
-  const GRAVITY = 1850;
-  const MOVE_ACCEL = 2600;
-  const MAX_RUN_SPEED = 380;
-  const GROUND_FRICTION = 12;
-  const AIR_FRICTION = 2.3;
-  const JUMP_VELOCITY = -760;
-  const PROXIMITY_RADIUS = 340;
+  const GRAVITY = 1920;
+  const MOVE_ACCEL = 2700;
+  const MAX_RUN_SPEED = 395;
+  const GROUND_FRICTION = 13;
+  const AIR_FRICTION = 2.35;
 
-  let world = { width: 2600, height: 1300, spawn: { x: 1300, y: 500 } };
+  const JUMP_IMPULSE = -830;
+  const JUMP_HOLD_FORCE = 2100;
+  const JUMP_HOLD_TIME = 0.18;
+  const JUMP_CUT_MULTIPLIER = 0.48;
+
+  const PROXIMITY_RADIUS = 340;
+  const PORTAL_INTERACT_RADIUS = 120;
+
+  let world = {
+    width: 2800,
+    height: 1400,
+    spawn: { x: 1400, y: 540 },
+    portal: { x: 1325, y: 1180, w: 150, h: 140, target: "/dungeon" },
+  };
   let platforms = buildPlatforms(world);
+  let decorations = buildDecorations(world);
+
   let myId = null;
   let joined = false;
+  let inPortalRange = false;
+  let contextTargetId = null;
 
   const player = {
     id: null,
+    profileId: null,
     nickname: "",
+    hp: 100,
+    coin: 0,
     x: world.spawn.x,
     y: world.spawn.y,
     vx: 0,
@@ -54,42 +80,93 @@
 
   const remotePlayers = new Map();
   const privateThreads = new Map();
+  const pendingInvite = { fromId: null, fromName: "" };
+
   let activePrivateTargetId = null;
 
   const keys = {
     left: false,
     right: false,
     jumpHeld: false,
+    up: false,
   };
+
   let jumpQueued = false;
+  let jumpHolding = false;
+  let jumpHoldTimer = 0;
+  let jumpCutQueued = false;
+  let interactQueued = false;
 
   let accum = 0;
   let prevTs = performance.now();
   let stateSendTimer = 0;
 
   const camera = { x: 0, y: 0 };
-  let contextTargetId = null;
 
   function buildPlatforms(currentWorld) {
     const w = currentWorld.width;
     const h = currentWorld.height;
-    const border = 80;
+    const border = 84;
 
     return [
       { x: 0, y: h - 80, w, h: 80 },
       { x: -border, y: 0, w: border, h },
       { x: w, y: 0, w: border, h },
       { x: 0, y: -border, w, h: border },
-      { x: 180, y: h - 250, w: 360, h: 26 },
-      { x: 610, y: h - 360, w: 290, h: 24 },
-      { x: 990, y: h - 230, w: 310, h: 24 },
-      { x: 1380, y: h - 370, w: 330, h: 24 },
-      { x: 1810, y: h - 260, w: 310, h: 24 },
-      { x: 2180, y: h - 420, w: 240, h: 24 },
-      { x: 1060, y: h - 520, w: 520, h: 22 },
-      { x: 900, y: h - 700, w: 250, h: 20 },
-      { x: 1450, y: h - 680, w: 250, h: 20 },
+      { x: 220, y: h - 280, w: 360, h: 26 },
+      { x: 680, y: h - 380, w: 280, h: 24 },
+      { x: 1040, y: h - 260, w: 340, h: 24 },
+      { x: 1500, y: h - 390, w: 360, h: 24 },
+      { x: 1940, y: h - 280, w: 300, h: 24 },
+      { x: 2290, y: h - 450, w: 260, h: 24 },
+      { x: 1110, y: h - 540, w: 560, h: 22 },
+      { x: 920, y: h - 730, w: 240, h: 20 },
+      { x: 1660, y: h - 730, w: 240, h: 20 },
+      { x: 1320, y: h - 190, w: 160, h: 18 },
     ];
+  }
+
+  function buildDecorations(currentWorld) {
+    const h = currentWorld.height;
+    return {
+      trees: [
+        { x: 360, y: h - 120, s: 1.05 },
+        { x: 720, y: h - 124, s: 0.9 },
+        { x: 1860, y: h - 122, s: 1.1 },
+        { x: 2360, y: h - 118, s: 0.95 },
+      ],
+      banners: [
+        { x: 1080, y: h - 565, w: 120, text: "MINI" },
+        { x: 1600, y: h - 565, w: 120, text: "DUNGEON" },
+      ],
+      statues: [
+        { x: 1420, y: h - 148, w: 44, h: 68 },
+        { x: 1370, y: h - 148, w: 34, h: 54 },
+      ],
+    };
+  }
+
+  function savePlayerProfile() {
+    const payload = {
+      _id: player.profileId,
+      nickname: player.nickname,
+      hp: player.hp,
+      coin: player.coin,
+    };
+    sessionStorage.setItem("player_profile", JSON.stringify(payload));
+  }
+
+  function parseProfileForStorage(payload) {
+    if (!payload) {
+      return;
+    }
+    player.profileId = payload._id || player.profileId;
+    player.hp = Number.isFinite(payload.hp) ? payload.hp : player.hp;
+    player.coin = Number.isFinite(payload.coin) ? payload.coin : player.coin;
+
+    myHpEl.textContent = String(player.hp);
+    myCoinEl.textContent = String(player.coin);
+    savePlayerProfile();
   }
 
   function addFeedLine(text, type = "normal") {
@@ -97,7 +174,8 @@
     line.className = `feed-line ${type}`;
     line.textContent = text;
     lobbyFeed.appendChild(line);
-    while (lobbyFeed.children.length > 80) {
+
+    while (lobbyFeed.children.length > 90) {
       lobbyFeed.removeChild(lobbyFeed.firstChild);
     }
     lobbyFeed.scrollTop = lobbyFeed.scrollHeight;
@@ -107,11 +185,13 @@
     if (!privateThreads.has(targetId)) {
       privateThreads.set(targetId, { nickname: linePayload.partnerNickname, messages: [] });
     }
+
     const thread = privateThreads.get(targetId);
     if (linePayload.partnerNickname) {
       thread.nickname = linePayload.partnerNickname;
     }
     thread.messages.push(linePayload);
+
     while (thread.messages.length > 100) {
       thread.messages.shift();
     }
@@ -162,6 +242,19 @@
     contextMenu.classList.remove("hidden");
   }
 
+  function showInviteModal(fromId, fromName) {
+    pendingInvite.fromId = fromId;
+    pendingInvite.fromName = fromName;
+    inviteText.textContent = `${fromName} 님이 미니게임을 신청했습니다.`;
+    inviteModal.classList.remove("hidden");
+  }
+
+  function hideInviteModal() {
+    pendingInvite.fromId = null;
+    pendingInvite.fromName = "";
+    inviteModal.classList.add("hidden");
+  }
+
   function worldFromClient(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     const sx = ((clientX - rect.left) / rect.width) * canvas.width;
@@ -179,12 +272,7 @@
   }
 
   function intersects(a, b) {
-    return (
-      a.left < b.right &&
-      a.right > b.left &&
-      a.top < b.bottom &&
-      a.bottom > b.top
-    );
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
   }
 
   function playerRect(px = player.x, py = player.y) {
@@ -200,6 +288,20 @@
     };
   }
 
+  function portalRect() {
+    return {
+      left: world.portal.x,
+      right: world.portal.x + world.portal.w,
+      top: world.portal.y,
+      bottom: world.portal.y + world.portal.h,
+    };
+  }
+
+  function enterDungeonFromPortal() {
+    savePlayerProfile();
+    window.location.assign("/dungeon");
+  }
+
   function stepMovement(dt) {
     if (!joined) {
       return;
@@ -210,8 +312,7 @@
 
     if (!intent) {
       const friction = player.onGround ? GROUND_FRICTION : AIR_FRICTION;
-      const decay = Math.max(0, 1 - friction * dt);
-      player.vx *= decay;
+      player.vx *= Math.max(0, 1 - friction * dt);
       if (Math.abs(player.vx) < 2.6) {
         player.vx = 0;
       }
@@ -223,13 +324,30 @@
     }
 
     if (jumpQueued && player.onGround) {
-      player.vy = JUMP_VELOCITY;
+      player.vy = JUMP_IMPULSE;
       player.onGround = false;
+      jumpHolding = true;
+      jumpHoldTimer = 0;
     }
     jumpQueued = false;
 
+    if (jumpHolding && keys.jumpHeld && jumpHoldTimer < JUMP_HOLD_TIME && player.vy < 0) {
+      player.vy -= JUMP_HOLD_FORCE * dt;
+      jumpHoldTimer += dt;
+    }
+
+    if ((!keys.jumpHeld || jumpHoldTimer >= JUMP_HOLD_TIME) && jumpHolding) {
+      jumpHolding = false;
+    }
+
+    if (jumpCutQueued && player.vy < 0) {
+      player.vy *= JUMP_CUT_MULTIPLIER;
+      jumpCutQueued = false;
+      jumpHolding = false;
+    }
+
     player.vy += GRAVITY * dt;
-    player.vy = clamp(player.vy, -1000, 1400);
+    player.vy = clamp(player.vy, -1200, 1500);
 
     player.x += player.vx * dt;
     let rect = playerRect(player.x, player.y);
@@ -243,6 +361,7 @@
       if (!intersects(rect, platRect)) {
         continue;
       }
+
       if (player.vx > 0) {
         player.x = platRect.left - rect.hw;
       } else if (player.vx < 0) {
@@ -265,6 +384,7 @@
       if (!intersects(rect, platRect)) {
         continue;
       }
+
       if (player.vy > 0) {
         player.y = platRect.top - rect.hh;
         player.vy = 0;
@@ -283,10 +403,10 @@
     }
 
     const escaped =
-      player.x < -150 ||
-      player.x > world.width + 150 ||
+      player.x < -170 ||
+      player.x > world.width + 170 ||
       player.y < -250 ||
-      player.y > world.height + 250;
+      player.y > world.height + 280;
 
     if (escaped || player.y > world.height + 120) {
       player.x = world.spawn.x;
@@ -294,6 +414,22 @@
       player.vx = 0;
       player.vy = 0;
       addFeedLine("로비 바깥으로 벗어나 중앙으로 복귀했습니다.", "system");
+    }
+
+    const pr = portalRect();
+    const centerDx = Math.abs(player.x - (pr.left + pr.right) * 0.5);
+    const centerDy = Math.abs(player.y - (pr.top + pr.bottom) * 0.5);
+    inPortalRange =
+      intersects(playerRect(), pr) ||
+      (centerDx < PORTAL_INTERACT_RADIUS && centerDy < PORTAL_INTERACT_RADIUS * 1.15);
+
+    if (interactQueued) {
+      interactQueued = false;
+      if (inPortalRange) {
+        addFeedLine("던전으로 이동합니다.", "system");
+        enterDungeonFromPortal();
+        return;
+      }
     }
 
     camera.x = clamp(player.x - canvas.width * 0.5, 0, world.width - canvas.width);
@@ -314,25 +450,26 @@
 
   function drawBackground() {
     const grd = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    grd.addColorStop(0, "#bfe8ff");
-    grd.addColorStop(1, "#6ac59b");
+    grd.addColorStop(0, "#c8efff");
+    grd.addColorStop(0.55, "#8fdac8");
+    grd.addColorStop(1, "#6dbb84");
     ctx.fillStyle = grd;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.fillStyle = "#ffffff80";
-    for (let i = 0; i < 8; i += 1) {
-      const x = ((i * 170) - camera.x * 0.2) % (canvas.width + 200) - 100;
-      const y = 80 + (i % 3) * 48;
+    ctx.fillStyle = "#ffffff8f";
+    for (let i = 0; i < 11; i += 1) {
+      const x = ((i * 190) - camera.x * 0.22) % (canvas.width + 240) - 110;
+      const y = 70 + (i % 4) * 42;
       ctx.beginPath();
-      ctx.ellipse(x, y, 65, 22, 0, 0, Math.PI * 2);
+      ctx.ellipse(x, y, 68, 22, 0, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    ctx.fillStyle = "#8fc59d";
-    for (let i = 0; i < 6; i += 1) {
-      const w = 250;
-      const x = ((i * 300) - camera.x * 0.34) % (canvas.width + 330) - 120;
-      const y = canvas.height - 190 - (i % 2) * 45;
+    for (let i = 0; i < 9; i += 1) {
+      const w = 260;
+      const x = ((i * 320) - camera.x * 0.35) % (canvas.width + 340) - 140;
+      const y = canvas.height - 185 - (i % 3) * 35;
+      ctx.fillStyle = i % 2 ? "#8ac08d" : "#94c59a";
       ctx.beginPath();
       ctx.moveTo(x, canvas.height);
       ctx.lineTo(x + w * 0.5, y);
@@ -343,10 +480,78 @@
   }
 
   function drawPlatform(plat) {
-    ctx.fillStyle = "#5e4f3e";
+    ctx.fillStyle = "#564436";
     ctx.fillRect(plat.x, plat.y, plat.w, plat.h);
-    ctx.fillStyle = "#77b86e";
+    ctx.fillStyle = "#75bf70";
     ctx.fillRect(plat.x, plat.y, plat.w, Math.min(11, plat.h));
+  }
+
+  function drawPortal() {
+    const p = world.portal;
+    const centerX = p.x + p.w * 0.5;
+    const centerY = p.y + p.h * 0.5;
+    const pulse = 1 + Math.sin(performance.now() / 240) * 0.06;
+
+    ctx.fillStyle = "#2f2a58";
+    ctx.fillRect(p.x - 8, p.y + 8, p.w + 16, p.h + 14);
+
+    const glow = ctx.createRadialGradient(centerX, centerY, 10, centerX, centerY, 80 * pulse);
+    glow.addColorStop(0, "#9de0ffef");
+    glow.addColorStop(0.45, "#5fb5ffcc");
+    glow.addColorStop(1, "#4560c000");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.ellipse(centerX, centerY, 62 * pulse, 72 * pulse, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "#e4f6ff";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(centerX, centerY, 54, 64, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "15px Pretendard, Noto Sans KR, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("DUNGEON", centerX, p.y - 14);
+  }
+
+  function drawDecorations() {
+    decorations.trees.forEach((tree) => {
+      const trunkW = 16 * tree.s;
+      const trunkH = 44 * tree.s;
+      ctx.fillStyle = "#6e5038";
+      ctx.fillRect(tree.x - trunkW * 0.5, tree.y - trunkH, trunkW, trunkH);
+
+      ctx.fillStyle = "#448d4c";
+      ctx.beginPath();
+      ctx.arc(tree.x, tree.y - trunkH - 18 * tree.s, 28 * tree.s, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(tree.x - 20 * tree.s, tree.y - trunkH, 22 * tree.s, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(tree.x + 22 * tree.s, tree.y - trunkH + 4 * tree.s, 20 * tree.s, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    decorations.statues.forEach((item) => {
+      ctx.fillStyle = "#8f8a84";
+      ctx.fillRect(item.x, item.y, item.w, item.h);
+      ctx.fillStyle = "#b6afa6";
+      ctx.fillRect(item.x + 4, item.y + 5, item.w - 8, item.h - 12);
+    });
+
+    decorations.banners.forEach((banner) => {
+      ctx.fillStyle = "#472f2f";
+      ctx.fillRect(banner.x, banner.y - 40, 8, 48);
+      ctx.fillStyle = "#f4d76f";
+      ctx.fillRect(banner.x + 8, banner.y - 38, banner.w, 30);
+      ctx.fillStyle = "#3a2b1e";
+      ctx.font = "bold 14px Pretendard, Noto Sans KR, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(banner.text, banner.x + 8 + banner.w * 0.5, banner.y - 18);
+    });
   }
 
   function drawSpeechBubble(text, x, y) {
@@ -385,10 +590,10 @@
     const x = entity.x - w * 0.5;
     const y = entity.y - h * 0.5;
 
-    ctx.fillStyle = isMine ? "#2564c7" : "#d14e4e";
+    ctx.fillStyle = isMine ? "#215fb7" : "#c64e4e";
     ctx.fillRect(x, y, w, h);
 
-    ctx.fillStyle = "#fbe6c7";
+    ctx.fillStyle = "#f9e4c3";
     ctx.fillRect(x + 12, y + 10, w - 24, 22);
 
     ctx.fillStyle = "#111";
@@ -413,20 +618,33 @@
     ctx.save();
     ctx.translate(-camera.x, -camera.y);
 
+    drawDecorations();
     platforms.forEach((plat) => drawPlatform(plat));
+    drawPortal();
     remotePlayers.forEach((p) => drawPlayer(p, false));
     drawPlayer(player, true);
 
+    if (inPortalRange) {
+      const p = world.portal;
+      ctx.fillStyle = "#151b2ccf";
+      ctx.fillRect(p.x - 34, p.y - 66, p.w + 68, 36);
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.font = "15px Pretendard, Noto Sans KR, sans-serif";
+      ctx.fillText("↑ 키를 눌러 던전 입장", p.x + p.w * 0.5, p.y - 42);
+    }
+
     ctx.restore();
 
-    ctx.fillStyle = "#00000080";
-    ctx.fillRect(12, 12, 338, 78);
+    ctx.fillStyle = "#00000082";
+    ctx.fillRect(12, 12, 432, 98);
     ctx.fillStyle = "#fff";
     ctx.font = "15px Pretendard, Noto Sans KR, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText(`플레이어 수: ${remotePlayers.size + 1}`, 24, 38);
     ctx.fillText(`좌표: (${Math.round(player.x)}, ${Math.round(player.y)})`, 24, 60);
-    ctx.fillText("방향키 좌우 / 스페이스 점프 / Enter 로비 채팅", 24, 82);
+    ctx.fillText("←/→ 이동 | Space 가변 점프 | Enter 채팅 | 포탈: ↑", 24, 82);
+    ctx.fillText("우클릭 플레이어: 친구추가 / 1:1대화 / 미니게임 신청", 24, 102);
   }
 
   function updateFromSnapshot(snapshot) {
@@ -503,6 +721,7 @@
     if (!text || !activePrivateTargetId) {
       return;
     }
+
     socket.emit("private_message", {
       target_id: activePrivateTargetId,
       text,
@@ -516,19 +735,25 @@
 
     for (const remote of remotePlayers.values()) {
       const localDist = Math.hypot(remote.x - player.x, remote.y - player.y);
-      if (localDist > 155) {
+      if (localDist > 165) {
         continue;
       }
+
       const clickDist = Math.hypot(remote.x - worldPos.x, remote.y - worldPos.y);
-      if (clickDist > 95) {
+      if (clickDist > 98) {
         continue;
       }
+
       if (clickDist < best) {
         best = clickDist;
         candidate = remote;
       }
     }
     return candidate;
+  }
+
+  function isTypingTarget(target) {
+    return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
   }
 
   function step(dt) {
@@ -543,10 +768,12 @@
     const delta = Math.min(0.05, (now - prevTs) / 1000);
     prevTs = now;
     accum += delta;
+
     while (accum >= FIXED_DT) {
       step(FIXED_DT);
       accum -= FIXED_DT;
     }
+
     render();
     requestAnimationFrame(gameLoop);
   }
@@ -561,28 +788,32 @@
     socket.emit("join_lobby", { nickname });
   });
 
-  socket.on("joined", ({ id, world: serverWorld, snapshot }) => {
+  socket.on("joined", ({ id, world: serverWorld, snapshot, profile }) => {
     myId = id;
     joined = true;
+
     player.id = id;
-    player.nickname = nicknameInput.value.trim().slice(0, 16) || "Guest";
+    player.nickname = profile?.nickname || nicknameInput.value.trim().slice(0, 16) || "Guest";
     myNameEl.textContent = player.nickname;
 
     if (serverWorld) {
       world = serverWorld;
       platforms = buildPlatforms(world);
+      decorations = buildDecorations(world);
       player.x = world.spawn.x;
       player.y = world.spawn.y;
       player.vx = 0;
       player.vy = 0;
     }
 
+    parseProfileForStorage(profile);
+
     if (snapshot) {
       updateFromSnapshot(snapshot);
     }
 
     startScreen.classList.remove("show");
-    addFeedLine("로비 입장 완료. Enter를 눌러 채팅을 시작하세요.", "system");
+    addFeedLine("로비 입장 완료. Enter로 채팅, 포탈 위에서 ↑로 던전 이동.", "system");
   });
 
   socket.on("state_snapshot", (snapshot) => {
@@ -631,6 +862,7 @@
     const partnerId = msg.from_id === myId ? msg.target_id : msg.from_id;
     const partnerName = msg.from_id === myId ? msg.target_nickname : msg.from_nickname;
     const author = msg.from_id === myId ? "나" : msg.from_nickname;
+
     addPrivateLine(partnerId, {
       author,
       text: msg.text,
@@ -641,6 +873,22 @@
       activePrivateTargetId = partnerId;
     }
     renderPrivateChat();
+  });
+
+  socket.on("minigame_invited", ({ from_id, from_nickname }) => {
+    showInviteModal(from_id, from_nickname);
+  });
+
+  socket.on("minigame_invite_declined", ({ nickname }) => {
+    addFeedLine(`${nickname} 님이 미니게임 신청을 거절했습니다.`, "system");
+  });
+
+  socket.on("minigame_start", (payload) => {
+    const sessionId = payload?.session_id || "";
+    sessionStorage.setItem("active_minigame_session", JSON.stringify(payload || {}));
+    savePlayerProfile();
+    const targetUrl = sessionId ? `/game?session=${encodeURIComponent(sessionId)}` : "/game";
+    window.location.assign(targetUrl);
   });
 
   canvas.addEventListener("contextmenu", (event) => {
@@ -679,6 +927,35 @@
     hideContextMenu();
   });
 
+  minigameBtn.addEventListener("click", () => {
+    if (contextTargetId) {
+      socket.emit("minigame_invite", { target_id: contextTargetId });
+    }
+    hideContextMenu();
+  });
+
+  inviteAcceptBtn.addEventListener("click", () => {
+    if (!pendingInvite.fromId) {
+      return;
+    }
+    socket.emit("minigame_invite_response", {
+      from_id: pendingInvite.fromId,
+      accepted: true,
+    });
+    hideInviteModal();
+  });
+
+  inviteDeclineBtn.addEventListener("click", () => {
+    if (!pendingInvite.fromId) {
+      return;
+    }
+    socket.emit("minigame_invite_response", {
+      from_id: pendingInvite.fromId,
+      accepted: false,
+    });
+    hideInviteModal();
+  });
+
   pmSendBtn.addEventListener("click", sendPrivateChat);
   pmInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -701,6 +978,9 @@
       keys.left = true;
     } else if (event.key === "ArrowRight") {
       keys.right = true;
+    } else if (event.key === "ArrowUp") {
+      keys.up = true;
+      interactQueued = true;
     } else if (event.key === " " || event.code === "Space") {
       keys.jumpHeld = true;
       jumpQueued = true;
@@ -714,6 +994,7 @@
     if (event.key === "Escape") {
       chatInputWrap.classList.add("hidden");
       hideContextMenu();
+      hideInviteModal();
       canvas.focus();
       return;
     }
@@ -744,8 +1025,13 @@
       keys.left = false;
     } else if (event.key === "ArrowRight") {
       keys.right = false;
+    } else if (event.key === "ArrowUp") {
+      keys.up = false;
     } else if (event.key === " " || event.code === "Space") {
       keys.jumpHeld = false;
+      if (player.vy < -80) {
+        jumpCutQueued = true;
+      }
     }
   });
 
@@ -769,17 +1055,26 @@
       coordinate_system: "origin=(top-left), +x=right, +y=down",
       me: {
         id: myId,
+        profile_id: player.profileId,
         nickname: player.nickname,
+        hp: player.hp,
+        coin: player.coin,
         x: Math.round(player.x),
         y: Math.round(player.y),
         vx: Math.round(player.vx),
         vy: Math.round(player.vy),
         on_ground: player.onGround,
       },
+      portal: {
+        in_range: inPortalRange,
+        x: world.portal.x,
+        y: world.portal.y,
+      },
       nearby_players: nearby,
       ui: {
         public_chat_open: !chatInputWrap.classList.contains("hidden"),
         private_target: activePrivateTargetId,
+        invite_modal_open: !inviteModal.classList.contains("hidden"),
       },
       counts: {
         total_players: remotePlayers.size + (joined ? 1 : 0),

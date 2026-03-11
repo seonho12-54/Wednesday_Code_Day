@@ -25,7 +25,7 @@ body {
 }
 
 .layout {
-  max-width: 1500px;
+  max-width: 1540px;
   margin: 0 auto;
   padding: 20px;
 }
@@ -33,7 +33,7 @@ body {
 .topbar {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
   align-items: center;
   padding: 12px 16px;
   border-radius: 14px;
@@ -42,14 +42,20 @@ body {
   margin-bottom: 12px;
 }
 
+.profile-wrap {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 .topbar-guide {
   font-size: 0.92rem;
-  opacity: 0.8;
+  opacity: 0.83;
 }
 
 .main-area {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 330px;
   gap: 12px;
 }
 
@@ -58,7 +64,8 @@ body {
   min-width: 0;
 }
 
-#game-canvas {
+#game-canvas,
+#dungeon-canvas {
   width: 100%;
   aspect-ratio: 16 / 9;
   display: block;
@@ -75,11 +82,22 @@ body {
 }
 
 .feed-box,
-.private-chat {
+.private-chat,
+.tile {
   background: #fffffff0;
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 12px;
+}
+
+.portal-help p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.36;
+}
+
+.portal-help p + p {
+  margin-top: 7px;
 }
 
 h2 {
@@ -93,6 +111,10 @@ h2 {
   display: grid;
   gap: 7px;
   padding-right: 3px;
+}
+
+.short-feed {
+  height: 160px;
 }
 
 .feed-line {
@@ -131,7 +153,8 @@ input {
   background: #fff;
 }
 
-button {
+button,
+.link-btn {
   border: 0;
   border-radius: 10px;
   background: var(--accent);
@@ -139,6 +162,14 @@ button {
   font-weight: 700;
   padding: 10px 13px;
   cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ghost-btn {
+  background: #506077;
 }
 
 .overlay {
@@ -186,6 +217,10 @@ button {
   gap: 4px;
 }
 
+.intro-list.compact {
+  margin-top: 6px;
+}
+
 .hidden {
   display: none !important;
 }
@@ -216,16 +251,111 @@ button {
 }
 
 .context-menu button {
-  width: 150px;
+  width: 170px;
   text-align: left;
 }
 
-@media (max-width: 1100px) {
-  .main-area {
+.invite-overlay {
+  z-index: 55;
+}
+
+.invite-card {
+  width: min(92vw, 390px);
+}
+
+.invite-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.subpage-body {
+  background:
+    radial-gradient(70% 70% at 80% 10%, #b4c5e5 0%, #b4c5e500 80%),
+    radial-gradient(60% 80% at 10% 90%, #dde8c3 0%, #dde8c300 75%),
+    linear-gradient(155deg, #e9edf5, #b4c2d4);
+}
+
+.subpage-layout {
+  max-width: 1540px;
+  margin: 0 auto;
+  padding: 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.subpage-header {
+  background: #ffffffe6;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.subpage-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.subpage-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 0.96rem;
+}
+
+.subpage-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.subpage-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 12px;
+}
+
+.subpage-panel {
+  background: #fffffff0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.hint-text {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.32;
+}
+
+.game-layout .subpage-content {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.game-content {
+  align-items: start;
+}
+
+.tile p {
+  margin: 6px 0;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+@media (max-width: 1220px) {
+  .main-area,
+  .subpage-content,
+  .game-layout .subpage-content {
     grid-template-columns: 1fr;
   }
 
   .feed {
-    height: 170px;
+    height: 176px;
   }
 }

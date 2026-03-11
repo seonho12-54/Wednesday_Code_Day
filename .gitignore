@@ -1,10 +1,13 @@
 .DS_Store
 .venv/
+.pycache/
 .npm-cache/
 .pip-cache/
 node_modules/
 output/
 web_game_playwright_client.js
 test_actions.json
+test_actions_*.json
+*_check.mjs
 package-lock.json
 package.json

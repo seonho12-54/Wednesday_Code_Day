@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dungeon Base</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body class="subpage-body">
+    <main class="subpage-layout">
+      <header class="subpage-header">
+        <h1>Dungeon Base</h1>
+        <div class="subpage-stats">
+          <span>닉네임: <strong id="dungeon-name">-</strong></span>
+          <span>HP: <strong id="dungeon-hp">-</strong></span>
+          <span>Coin: <strong id="dungeon-coin">-</strong></span>
+        </div>
+        <div class="subpage-actions">
+          <a class="link-btn" href="/">로비 복귀</a>
+          <a class="link-btn" href="/game">미니게임 허브</a>
+        </div>
+      </header>
+
+      <section class="subpage-content">
+        <canvas id="dungeon-canvas" width="1280" height="720"></canvas>
+        <aside class="subpage-panel">
+          <h2>던전 기반 상태</h2>
+          <div id="dungeon-feed" class="feed"></div>
+          <p class="hint-text">몹 스폰/전투는 분업 구현 예정. 지금은 이동/점프/공격키 훅만 제공.</p>
+          <p class="hint-text">공격 예약 키: Z / X / C</p>
+        </aside>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='dungeon.js') }}"></script>
+  </body>
+</html>

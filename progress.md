@@ -16,3 +16,14 @@ TODO / Suggestions for next agent:
 - 운영 배포 전 Flask 개발 서버 대신 gunicorn+eventlet/gevent 기반 실행 스크립트 추가 검토.
 - 우클릭 컨텍스트 메뉴를 모바일 대응하려면 long-press 상호작용 입력 추가 고려.
 - 현재 Socket.IO 클라이언트는 CDN 의존성이 있으므로 외부망 제한 환경이라면 정적 번들 로컬 서빙 방식으로 전환 필요.
+- 사용자 요구사항 업데이트 반영: 로비를 메인(`lobby.html`)으로 분리하고 `/dungeon`, `/game` 라우트를 추가.
+- 서버 확장: MongoDB 플레이어 저장소 계층(`_id`, `hp`, `coin`) 추가, 미니게임 신청/수락 소켓 이벤트(`minigame_invite`, `minigame_invite_response`, `minigame_start`) 추가.
+- 로비 확장: 포탈 진입 조건을 `포탈 범위 + ArrowUp`으로 구현, 우클릭 메뉴에 미니게임 신청 추가, 가변 점프(짧게/길게) 및 점프 높이 상향 적용.
+- 분업용 뼈대 추가: `dungeon.html + dungeon.js`(이동/점프/공격키 훅), `game.html + game.js`(세션/코인 사용 훅) 구성. 던전/미니게임 실제 콘텐츠는 미구현 상태 유지.
+- 파일 구조 정리: 기존 `templates/index.html`, `static/client.js` 제거.
+- 추가 요구 반영 구현: 포탈은 `ArrowUp`으로 진입하도록 변경, 점프는 가변 점프(짧게/길게) + 기본 높이 소폭 상향.
+- 페이지 분리 완료: `/`(lobby), `/dungeon`(기반), `/game`(기반).
+- 검증 1: Playwright 액션 테스트(`output/web-game-lobby`)에서 로비 입장/이동/점프/채팅 시나리오 및 상태 출력 정상.
+- 검증 2: Playwright 포탈 체크에서 `portal.in_range=true` 상태로 `ArrowUp` 입력 시 URL이 `/dungeon`으로 변경됨 확인.
+- 검증 3: 2클라이언트 Socket.IO 테스트에서 `minigame_invite -> minigame_invite_response(accepted) -> minigame_start` 양측 수신 확인.
+- 문서화: 분업용 가이드 `division.md` 생성(현재 구현 범위, 소켓 이벤트 계약, 던전/미니게임/백엔드 팀별 고려사항, 데이터 모델 권장안 정리).
