@@ -31,7 +31,7 @@
   const params = new URLSearchParams(window.location.search);
   const dungeonId = (params.get("dungeon") || "default_dungeon").trim().toLowerCase() || "default_dungeon";
 
-  let storedProfile = { _id: "guest", nickname: "Guest", hp: 100, coin: 0 };
+  let storedProfile = { id: "guest", _id: "guest", nickname: "Guest", hp: 100, coin: 0 };
   try {
     const profileRaw = sessionStorage.getItem("player_profile");
     if (profileRaw) {
@@ -42,6 +42,7 @@
   }
 
   const profile = {
+    id: String(storedProfile.id || storedProfile._id || "guest"),
     _id: String(storedProfile._id || "guest"),
     nickname: String(storedProfile.nickname || "Guest"),
     hp: Number(storedProfile.hp || 100),
@@ -152,6 +153,7 @@
   let controlHintCooldown = 0;
   let inReturnPortalRange = false;
   let interactQueued = false;
+  let returningToLobby = false;
 
   function addFeed(text, kind = "system") {
     if (!feedEl) {
@@ -173,10 +175,33 @@
     return Math.max(min, Math.min(max, value));
   }
 
-  function saveProfile() {
+  function syncProfileToServer() {
+    if (!socket || !socket.connected || !profile.nickname) {
+      return;
+    }
+    socket.emit("sync_profile", {
+      nickname: profile.nickname,
+      hp: Math.round(player.hp),
+      coin: player.coin,
+    });
+  }
+
+  function saveProfile({ syncServer = true } = {}) {
     profile.hp = Math.round(player.hp);
     profile.coin = player.coin;
-    sessionStorage.setItem("player_profile", JSON.stringify({ _id: profile._id, nickname: profile.nickname, hp: Math.round(player.hp), coin: player.coin }));
+    sessionStorage.setItem(
+      "player_profile",
+      JSON.stringify({
+        id: profile.id,
+        _id: profile._id,
+        nickname: profile.nickname,
+        hp: Math.round(player.hp),
+        coin: player.coin,
+      })
+    );
+    if (syncServer) {
+      syncProfileToServer();
+    }
   }
 
   function updateHud() {
@@ -233,8 +258,63 @@
   }
 
   function enterLobbyFromPortal() {
-    saveProfile();
-    window.location.assign(world.returnPortal.target || "/");
+    if (returningToLobby) {
+      return;
+    }
+    returningToLobby = true;
+    const target = world.returnPortal.target || "/";
+    const fallbackNavigate = () => {
+      player.hp = 100;
+      player.maxHp = Math.max(100, player.maxHp);
+      saveProfile({ syncServer: false });
+      window.location.assign(target);
+    };
+    if (!socket || !socket.connected) {
+      fallbackNavigate();
+      return;
+    }
+
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      fallbackNavigate();
+    }, 900);
+
+    socket.emit(
+      "dungeon_return_lobby",
+      { nickname: profile.nickname, coin: player.coin },
+      (response = {}) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        window.clearTimeout(timeoutId);
+        const synced = response && response.ok && response.profile ? response.profile : null;
+        if (synced) {
+          profile.id = String(synced.id || profile.id);
+          profile._id = String(synced._id || profile._id);
+          const hp = Number(synced.hp);
+          const coin = Number(synced.coin);
+          if (Number.isFinite(hp)) {
+            player.hp = Math.max(1, hp);
+            player.maxHp = Math.max(100, hp);
+          } else {
+            player.hp = 100;
+          }
+          if (Number.isFinite(coin)) {
+            player.coin = Math.max(0, Math.round(coin));
+          }
+          saveProfile({ syncServer: false });
+        } else {
+          fallbackNavigate();
+          return;
+        }
+        window.location.assign(target);
+      }
+    );
   }
   function makeCard(title, lines, className) {
     const card = document.createElement("div");
@@ -1709,6 +1789,22 @@
 
     socket.on("dungeon_joined", (payload) => {
       syncWorld(payload.world || null);
+      const serverProfile = payload?.profile || null;
+      if (serverProfile) {
+        profile.id = String(serverProfile.id || profile.id);
+        profile._id = String(serverProfile._id || profile._id);
+        profile.nickname = String(serverProfile.nickname || profile.nickname);
+        const hp = Number(serverProfile.hp);
+        const coin = Number(serverProfile.coin);
+        if (Number.isFinite(hp)) {
+          player.hp = Math.max(1, hp);
+          player.maxHp = Math.max(100, hp);
+        }
+        if (Number.isFinite(coin)) {
+          player.coin = Math.max(0, Math.round(coin));
+        }
+        saveProfile({ syncServer: false });
+      }
       dungeonKeywords = payload.keywords || null;
       applyMonsterSnapshot(payload.snapshot || {}, true);
       player.x = world.spawn.x;

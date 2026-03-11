@@ -63,3 +63,33 @@ TODO / Suggestions for next agent:
 - 이벤트 통일: 프론트 런타임(`static/minigames/volleyball.js`)의 소켓 이벤트/emit을 `volley_*`로 전환(`volley_joined`, `volley_waiting`, `volley_start`, `volley_state`, `volley_match_end`, `volley_input`, `volley_join_session`).
 - 서버 페이로드 적응: `volley_state`(서버 월드 좌표 2200x1200)를 캔버스 좌표(1280x720)로 스케일 변환해 렌더 오프셋 문제 방지.
 - 데모 코인 기본값: `static/game.js`, `static/minigames/volleyball.js` 모두 기본 0으로 조정.
+
+- 입력 버그 수정(lobby):
+  - 한글 IME 조합 중 Enter 전송 시 마지막 글자 누락 문제 대응: chat/pm 입력에서 composition 상태를 추적하고 Enter 전송을 조합 완료 후(setTimeout) 처리.
+  - 스페이스 장눌림 시 페이지 스크롤 문제 대응: 입력 포커스가 아닐 때 Space/Arrow 기본동작 preventDefault.
+  - 1:1 채팅에서 Space 미입력 문제 대응: 전역 키다운에서 입력 포커스(typing target)일 때 이동/점프 키 처리 무시.
+
+- MongoDB 영속화 확장:
+  - `PlayerRepository` 문서에 `id` 필드 추가(신규 생성 시 저장, 기존 문서는 조회 시 누락되면 보정).
+  - 프로필 정규화 응답에 `id/_id/nickname/hp/coin` 포함.
+- 서버 이벤트 추가/연결:
+  - `sync_profile` 소켓 이벤트 추가: 닉네임 기준 `hp/coin` DB 업데이트 + ACK 반환.
+  - `dungeon_return_lobby` 소켓 이벤트 추가: 던전 복귀 시 `hp=100`으로 리셋하고 `coin` 유지 + ACK 반환.
+  - `join_dungeon` 응답(`dungeon_joined`)에 DB 기준 `profile` 포함하도록 확장.
+  - `join_lobby` 응답(`joined.profile`)에도 `id` 포함.
+- 클라이언트 동기화 반영:
+  - `static/dungeon.js`
+    - `saveProfile()`에 `sync_profile` 서버 동기화 훅 추가.
+    - `dungeon_joined.profile`을 로컬 상태에 적용해 던전 진입 시 DB 값 기준으로 시작.
+    - 복귀 포탈에서 `dungeon_return_lobby` ACK 후 로비 이동하도록 변경(실패/타임아웃 시 로컬 fallback, HP 100 저장).
+  - `static/lobby.js`
+    - 던전 포탈 진입 직전에 `sync_profile` ACK를 기다린 뒤 이동(타임아웃 fallback).
+    - 세션 저장 프로필에 `id` 필드 포함.
+- 검증:
+  - 문법 체크: `node --check static/dungeon.js`, `node --check static/lobby.js` 통과.
+  - 서버 이벤트 통합 체크(`.venv/bin/python` + `socketio.test_client`) 통과:
+    - `join_lobby` -> 기본 프로필
+    - `sync_profile(hp=37, coin=91)` -> ACK 반영
+    - `join_dungeon` -> profile이 37/91로 전달
+    - `dungeon_return_lobby` -> ACK profile이 100/91로 전달
+  - Playwright는 1회 실행에서 스크린샷/상태 생성(`output/web-lobby-mongo-check`) 확인. 추가 1회는 샌드박스 Chromium 권한 오류로 실패.

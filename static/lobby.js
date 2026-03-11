@@ -157,6 +157,7 @@
 
   function savePlayerProfile() {
     const payload = {
+      id: player.profileId,
       _id: player.profileId,
       nickname: player.nickname,
       hp: Math.round(player.hp),
@@ -341,7 +342,33 @@
 
   function enterDungeonFromPortal() {
     savePlayerProfile();
-    window.location.assign("/dungeon");
+    if (!socket.connected || !player.nickname) {
+      window.location.assign("/dungeon");
+      return;
+    }
+
+    let moved = false;
+    const moveToDungeon = () => {
+      if (moved) {
+        return;
+      }
+      moved = true;
+      window.location.assign("/dungeon");
+    };
+
+    const timeoutId = window.setTimeout(moveToDungeon, 700);
+    socket.emit(
+      "sync_profile",
+      {
+        nickname: player.nickname,
+        hp: Math.round(player.hp),
+        coin: player.coin,
+      },
+      () => {
+        window.clearTimeout(timeoutId);
+        moveToDungeon();
+      }
+    );
   }
 
   function stepMovement(dt) {

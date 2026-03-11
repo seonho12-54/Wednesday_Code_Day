@@ -47,7 +47,9 @@ class PlayerRepository:
 
     @staticmethod
     def _normalize_profile(raw: Dict[str, Any]) -> Dict[str, Any]:
+        identity = str(raw.get("id") or raw.get("_id") or "")
         return {
+            "id": identity,
             "_id": str(raw.get("_id", "")),
             "nickname": str(raw.get("nickname", "Guest")),
             "hp": int(raw.get("hp", 100)),
@@ -59,6 +61,7 @@ class PlayerRepository:
             doc = self.collection.find_one({"nickname": nickname})
             if doc is None:
                 candidate = {
+                    "id": f"player-{uuid.uuid4().hex[:12]}",
                     "nickname": nickname,
                     "hp": 100,
                     "coin": 10,
@@ -74,12 +77,24 @@ class PlayerRepository:
                 except PyMongoError:
                     doc = None
 
+            if doc is not None and not doc.get("id"):
+                generated_id = f"player-{uuid.uuid4().hex[:12]}"
+                try:
+                    self.collection.update_one(
+                        {"_id": doc["_id"]},
+                        {"$set": {"id": generated_id, "updated_at": time.time()}},
+                    )
+                    doc["id"] = generated_id
+                except PyMongoError:
+                    doc["id"] = generated_id
+
             if doc is not None:
                 return self._normalize_profile(doc)
 
         key = nickname.lower()
         if key not in self._local_profiles:
             self._local_profiles[key] = {
+                "id": f"player-{uuid.uuid4().hex[:12]}",
                 "_id": f"local-{uuid.uuid4().hex[:10]}",
                 "nickname": nickname,
                 "hp": 100,
@@ -111,6 +126,7 @@ class PlayerRepository:
             profile = self._local_profiles.get(key)
             if profile is None:
                 profile = {
+                    "id": f"player-{uuid.uuid4().hex[:12]}",
                     "_id": f"local-{uuid.uuid4().hex[:10]}",
                     "nickname": nickname,
                     "hp": 100,
@@ -145,6 +161,7 @@ class PlayerRepository:
             profile = self._local_profiles.get(key)
             if profile is None:
                 profile = {
+                    "id": f"player-{uuid.uuid4().hex[:12]}",
                     "_id": f"local-{uuid.uuid4().hex[:10]}",
                     "nickname": nickname,
                     "hp": 100,
@@ -152,6 +169,61 @@ class PlayerRepository:
                 }
                 self._local_profiles[key] = profile
             profile["coin"] = max(0, int(profile.get("coin", 0)) + amount)
+            return {"ok": True, "profile": dict(profile)}
+
+    def update_profile(
+        self,
+        nickname: str,
+        hp: Optional[int] = None,
+        coin: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        updates: Dict[str, Any] = {}
+        if hp is not None:
+            updates["hp"] = max(0, int(hp))
+        if coin is not None:
+            updates["coin"] = max(0, int(coin))
+
+        if not updates:
+            return {"ok": True, "profile": self.get_or_create(nickname)}
+
+        if self.enabled and self.collection is not None:
+            try:
+                doc = self.collection.find_one_and_update(
+                    {"nickname": nickname},
+                    {"$set": {**updates, "updated_at": time.time()}},
+                    return_document=ReturnDocument.AFTER,
+                )
+            except PyMongoError:
+                doc = None
+            if doc is None:
+                # Ensure profile exists first, then retry update.
+                self.get_or_create(nickname)
+                try:
+                    doc = self.collection.find_one_and_update(
+                        {"nickname": nickname},
+                        {"$set": {**updates, "updated_at": time.time()}},
+                        return_document=ReturnDocument.AFTER,
+                    )
+                except PyMongoError:
+                    doc = None
+            if doc is None:
+                return {"ok": False, "error": "update_failed"}
+            return {"ok": True, "profile": self._normalize_profile(doc)}
+
+        key = nickname.lower()
+        with self._local_lock:
+            profile = self._local_profiles.get(key)
+            if profile is None:
+                profile = {
+                    "id": f"player-{uuid.uuid4().hex[:12]}",
+                    "_id": f"local-{uuid.uuid4().hex[:10]}",
+                    "nickname": nickname,
+                    "hp": 100,
+                    "coin": 10,
+                }
+                self._local_profiles[key] = profile
+            for update_key, value in updates.items():
+                profile[update_key] = int(value)
             return {"ok": True, "profile": dict(profile)}
 
 
@@ -979,6 +1051,8 @@ def dev_grant_coin() -> Any:
 
 @socketio.on("join_dungeon")
 def on_join_dungeon(data: Dict[str, Any]) -> None:
+    nickname = sanitize_nickname((data or {}).get("nickname"))
+    profile = player_repository.get_or_create(nickname)
     dungeon_id = sanitize_dungeon_id((data or {}).get("dungeon_id"))
     dungeon_repository.seed_dungeon(dungeon_id, dungeon_seed_for(dungeon_id))
     dungeon_repository.touch_dungeon(dungeon_id)
@@ -989,6 +1063,13 @@ def on_join_dungeon(data: Dict[str, Any]) -> None:
             "dungeon_id": dungeon_id,
             "world": {**DUNGEON_WORLD, "id": dungeon_id},
             "snapshot": make_dungeon_snapshot(dungeon_id),
+            "profile": {
+                "id": profile["id"],
+                "_id": profile["_id"],
+                "nickname": profile["nickname"],
+                "hp": int(profile["hp"]),
+                "coin": int(profile["coin"]),
+            },
             "keywords": {
                 "spawn_manager": True,
                 "wave_timer": "pending",
@@ -1001,6 +1082,97 @@ def on_join_dungeon(data: Dict[str, Any]) -> None:
             },
         },
     )
+
+
+@socketio.on("sync_profile")
+def on_sync_profile(data: Dict[str, Any]) -> Dict[str, Any]:
+    payload = data or {}
+    nickname = sanitize_nickname(payload.get("nickname"))
+    hp_raw = payload.get("hp")
+    coin_raw = payload.get("coin")
+
+    hp_value = None
+    if hp_raw is not None:
+        try:
+            hp_value = max(0, int(hp_raw))
+        except Exception:
+            hp_value = None
+
+    coin_value = None
+    if coin_raw is not None:
+        try:
+            coin_value = max(0, int(coin_raw))
+        except Exception:
+            coin_value = None
+
+    result = player_repository.update_profile(
+        nickname=nickname,
+        hp=hp_value,
+        coin=coin_value,
+    )
+    if not result.get("ok"):
+        return {"ok": False, "error": result.get("error", "sync_failed")}
+
+    profile = result["profile"]
+    sid = request.sid
+    with state_lock:
+        player = find_player(sid)
+        if player is not None and player.get("nickname") == nickname:
+            player["profile_id"] = profile["_id"]
+            player["hp"] = int(profile["hp"])
+            player["coin"] = int(profile["coin"])
+
+    return {
+        "ok": True,
+        "profile": {
+            "id": profile["id"],
+            "_id": profile["_id"],
+            "nickname": profile["nickname"],
+            "hp": int(profile["hp"]),
+            "coin": int(profile["coin"]),
+        },
+    }
+
+
+@socketio.on("dungeon_return_lobby")
+def on_dungeon_return_lobby(data: Dict[str, Any]) -> Dict[str, Any]:
+    payload = data or {}
+    nickname = sanitize_nickname(payload.get("nickname"))
+    coin_raw = payload.get("coin")
+    coin_value = None
+    if coin_raw is not None:
+        try:
+            coin_value = max(0, int(coin_raw))
+        except Exception:
+            coin_value = None
+
+    result = player_repository.update_profile(
+        nickname=nickname,
+        hp=100,
+        coin=coin_value,
+    )
+    if not result.get("ok"):
+        return {"ok": False, "error": result.get("error", "return_failed")}
+
+    profile = result["profile"]
+    with state_lock:
+        for player in players.values():
+            if player.get("nickname") != nickname:
+                continue
+            player["profile_id"] = profile["_id"]
+            player["hp"] = int(profile["hp"])
+            player["coin"] = int(profile["coin"])
+
+    return {
+        "ok": True,
+        "profile": {
+            "id": profile["id"],
+            "_id": profile["_id"],
+            "nickname": profile["nickname"],
+            "hp": int(profile["hp"]),
+            "coin": int(profile["coin"]),
+        },
+    }
 
 
 @socketio.on("request_dungeon_snapshot")
@@ -1063,6 +1235,7 @@ def on_join_lobby(data: Dict[str, Any]) -> None:
             "world": WORLD,
             "snapshot": snapshot,
             "profile": {
+                "id": profile["id"],
                 "_id": profile["_id"],
                 "nickname": nickname,
                 "hp": int(profile["hp"]),
