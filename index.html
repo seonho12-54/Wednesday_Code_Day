@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>한글 스네이크 게임</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="앱">
+      <section class="정보판">
+        <p class="배지">한글 아케이드</p>
+        <h1>스네이크 게임</h1>
+        <p class="설명">
+          먹이를 먹고 몸집을 키우세요. 벽이나 자기 몸에 닿으면 게임이 끝납니다.
+        </p>
+        <div class="점수판">
+          <article>
+            <span class="항목">현재 점수</span>
+            <strong id="현재점수">0</strong>
+          </article>
+          <article>
+            <span class="항목">최고 점수</span>
+            <strong id="최고점수">0</strong>
+          </article>
+          <article>
+            <span class="항목">속도</span>
+            <strong id="현재속도">보통</strong>
+          </article>
+        </div>
+        <div class="조작안내">
+          <p>조작: 방향키, WASD, 화면 버튼</p>
+          <p>시작/일시정지: 스페이스바 또는 아래 버튼</p>
+        </div>
+        <div class="버튼줄">
+          <button id="시작버튼" type="button">게임 시작</button>
+          <button id="일시정지버튼" type="button">일시정지</button>
+        </div>
+        <label class="난이도">
+          <span>속도 선택</span>
+          <select id="속도선택">
+            <option value="170">느림</option>
+            <option value="130" selected>보통</option>
+            <option value="95">빠름</option>
+            <option value="70">매우 빠름</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="게임영역">
+        <div class="캔버스상자">
+          <canvas
+            id="게임판"
+            width="420"
+            height="420"
+            aria-label="스네이크 게임판"
+          ></canvas>
+          <div id="상태메시지" class="상태메시지">시작 버튼을 누르세요</div>
+        </div>
+
+        <div class="터치패드" aria-label="터치 조작 패드">
+          <button class="방향버튼 위" type="button" data-direction="up">위</button>
+          <button class="방향버튼 왼쪽" type="button" data-direction="left">왼쪽</button>
+          <button class="방향버튼 아래" type="button" data-direction="down">아래</button>
+          <button class="방향버튼 오른쪽" type="button" data-direction="right">오른쪽</button>
+          <button class="방향버튼 중앙" type="button" data-action="toggle">시작 / 정지</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
