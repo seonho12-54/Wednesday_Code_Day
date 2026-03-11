@@ -1,4 +1,4 @@
-(() => {
+﻿(() => {
   const canvas = document.getElementById("game-canvas");
   const ctx = canvas.getContext("2d");
 
@@ -45,6 +45,7 @@
 
   const PROXIMITY_RADIUS = 340;
   const PORTAL_INTERACT_RADIUS = 120;
+  const LOBBY_REGEN_PER_SECOND = 2.4;
 
   let world = {
     width: 2800,
@@ -71,12 +72,14 @@
     y: world.spawn.y,
     vx: 0,
     vy: 0,
-    width: 52,
-    height: 68,
+    width: 56,
+    height: 74,
     onGround: false,
     direction: 1,
     bubble: "",
     bubbleUntil: 0,
+    maxHp: 100,
+    regenPulse: 0,
   };
 
   const remotePlayers = new Map();
@@ -151,10 +154,15 @@
     const payload = {
       _id: player.profileId,
       nickname: player.nickname,
-      hp: player.hp,
+      hp: Math.round(player.hp),
       coin: player.coin,
     };
     sessionStorage.setItem("player_profile", JSON.stringify(payload));
+  }
+
+  function syncPlayerStatsUi() {
+    myHpEl.textContent = String(Math.round(player.hp));
+    myCoinEl.textContent = String(player.coin);
   }
 
   function parseProfileForStorage(payload) {
@@ -163,10 +171,10 @@
     }
     player.profileId = payload._id || player.profileId;
     player.hp = Number.isFinite(payload.hp) ? payload.hp : player.hp;
+    player.maxHp = Math.max(100, Number.isFinite(payload.max_hp) ? payload.max_hp : player.maxHp);
     player.coin = Number.isFinite(payload.coin) ? payload.coin : player.coin;
 
-    myHpEl.textContent = String(player.hp);
-    myCoinEl.textContent = String(player.coin);
+    syncPlayerStatsUi();
     savePlayerProfile();
   }
 
@@ -236,7 +244,7 @@
 
     const thread = privateThreads.get(activePrivateTargetId);
     privateChatEl.classList.remove("hidden");
-    pmTitle.textContent = `1:1 대화 - ${thread.nickname}`;
+    pmTitle.textContent = `1:1 ???- ${thread.nickname}`;
     pmFeed.innerHTML = "";
 
     thread.messages.forEach((msg) => {
@@ -272,7 +280,7 @@
   function showInviteModal(fromId, fromName) {
     pendingInvite.fromId = fromId;
     pendingInvite.fromName = fromName;
-    inviteText.textContent = `${fromName} 님이 미니게임을 신청했습니다.`;
+    inviteText.textContent = `${fromName} ?섏씠 誘몃땲寃뚯엫???좎껌?덉뒿?덈떎.`;
     inviteModal.classList.remove("hidden");
     inviteModal.classList.add("show");
   }
@@ -442,7 +450,7 @@
       player.y = world.spawn.y;
       player.vx = 0;
       player.vy = 0;
-      addFeedLine("로비 바깥으로 벗어나 중앙으로 복귀했습니다.", "system");
+      addFeedLine("濡쒕퉬 諛붽묑?쇰줈 踰쀬뼱??以묒븰?쇰줈 蹂듦??덉뒿?덈떎.", "system");
     }
 
     const pr = portalRect();
@@ -455,7 +463,7 @@
     if (interactQueued) {
       interactQueued = false;
       if (inPortalRange) {
-        addFeedLine("던전으로 이동합니다.", "system");
+        addFeedLine("?섏쟾?쇰줈 ?대룞?⑸땲??", "system");
         enterDungeonFromPortal();
         return;
       }
@@ -613,32 +621,126 @@
     ctx.fillText(text, x, by + 19);
   }
 
+  function drawOverheadBar(x, y, width, ratio, fill) {
+    ctx.fillStyle = "#00000088";
+    ctx.fillRect(x - width * 0.5, y, width, 8);
+    ctx.fillStyle = fill;
+    ctx.fillRect(x - width * 0.5 + 1, y + 1, (width - 2) * clamp(ratio, 0, 1), 6);
+  }
+
+  function getCharacterPose(entity, now) {
+    const velocityX = Number(entity.vx || 0);
+    const velocityY = Number(entity.vy || 0);
+    const onGround = entity === player ? player.onGround : true;
+    const runBlend = clamp(Math.abs(velocityX) / MAX_RUN_SPEED, 0, 1);
+    const stride = Math.sin(now * 0.018 + (entity.id === myId ? 0 : 0.8)) * runBlend;
+    const pose = {
+      bob: onGround ? Math.abs(Math.sin(now * 0.02)) * 2.8 * runBlend : 0,
+      bodyLean: clamp(velocityX / MAX_RUN_SPEED, -0.14, 0.14),
+      armFront: stride * 0.9,
+      armBack: -stride * 0.9,
+      legFront: -stride * 1.15,
+      legBack: stride * 1.15,
+    };
+
+    if (!onGround) {
+      pose.bodyLean = velocityY < 0 ? -0.08 : 0.08;
+      pose.armFront = 0.4;
+      pose.armBack = -0.35;
+      pose.legFront = -0.55;
+      pose.legBack = 0.7;
+    }
+
+    return pose;
+  }
+
   function drawPlayer(entity, isMine = false) {
-    const w = player.width;
-    const h = player.height;
-    const x = entity.x - w * 0.5;
-    const y = entity.y - h * 0.5;
+    const now = performance.now();
+    const pose = getCharacterPose(entity, now);
+    const direction = entity.direction < 0 ? -1 : 1;
+    const bodyColor = isMine ? "#2a75d5" : "#d26161";
+    const accentColor = isMine ? "#5aa0ff" : "#f29a9a";
 
-    ctx.fillStyle = isMine ? "#215fb7" : "#c64e4e";
-    ctx.fillRect(x, y, w, h);
+    ctx.save();
+    ctx.translate(entity.x, entity.y + pose.bob);
+    ctx.scale(direction, 1);
 
-    ctx.fillStyle = "#f9e4c3";
-    ctx.fillRect(x + 12, y + 10, w - 24, 22);
+    ctx.fillStyle = "#0000001d";
+    ctx.beginPath();
+    ctx.ellipse(0, 18, 22, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.rotate(pose.bodyLean);
+
+    ctx.strokeStyle = "#21365c";
+    ctx.lineCap = "round";
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.moveTo(-8, 10);
+    ctx.lineTo(-12 + pose.legBack * 12, 34);
+    ctx.moveTo(8, 10);
+    ctx.lineTo(12 + pose.legFront * 12, 34);
+    ctx.stroke();
+
+    ctx.fillStyle = bodyColor;
+    ctx.beginPath();
+    ctx.roundRect(-16, -18, 32, 36, 10);
+    ctx.fill();
+
+    ctx.lineWidth = 7;
+    ctx.strokeStyle = accentColor;
+    ctx.beginPath();
+    ctx.moveTo(-14, -8);
+    ctx.lineTo(-28, -2 + pose.armBack * 10);
+    ctx.moveTo(14, -8);
+    ctx.lineTo(28, -2 + pose.armFront * 12);
+    ctx.stroke();
+
+    ctx.fillStyle = "#f7ddbc";
+    ctx.beginPath();
+    ctx.arc(0, -34, 16, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#0d1824";
+    ctx.beginPath();
+    ctx.arc(6, -34, 2.3, 0, Math.PI * 2);
+    ctx.arc(-5, -34, 2.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#11315a";
+    ctx.beginPath();
+    ctx.arc(0, -48, 18, Math.PI, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = isMine ? "#dce7f7" : "#ffe5d8";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(28, -4 + pose.armFront * 12);
+    ctx.lineTo(56, -22);
+    ctx.stroke();
+
+    ctx.strokeStyle = isMine ? "#f4be53" : "#f7d27c";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(26, 1 + pose.armFront * 12);
+    ctx.lineTo(36, -3);
+    ctx.stroke();
+
+    ctx.restore();
+
+    const hpRatio = Number.isFinite(entity.hp)
+      ? entity.hp / Math.max(1, Number(entity.maxHp || 100))
+      : 1;
+    drawOverheadBar(entity.x, entity.y - 96, 72, hpRatio, isMine ? "#ff6961" : "#8edc94");
 
     ctx.fillStyle = "#111";
     ctx.font = "14px Pretendard, Noto Sans KR, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(entity.nickname, entity.x, y - 10);
+    ctx.fillText(entity.nickname, entity.x, entity.y - 106);
 
     if (entity.bubble && entity.bubbleUntil > performance.now() / 1000) {
-      drawSpeechBubble(entity.bubble, entity.x, y - 2);
+      drawSpeechBubble(entity.bubble, entity.x, entity.y - 48);
     }
-
-    ctx.fillStyle = "#0d1824";
-    const eyeOffset = entity.direction < 0 ? -8 : 8;
-    ctx.beginPath();
-    ctx.arc(entity.x + eyeOffset, y + 24, 3, 0, Math.PI * 2);
-    ctx.fill();
   }
 
   function drawWorld() {
@@ -660,7 +762,7 @@
       ctx.fillStyle = "#fff";
       ctx.textAlign = "center";
       ctx.font = "15px Pretendard, Noto Sans KR, sans-serif";
-      ctx.fillText("↑ 키를 눌러 던전 입장", p.x + p.w * 0.5, p.y - 42);
+      ctx.fillText("???ㅻ? ?뚮윭 ?섏쟾 ?낆옣", p.x + p.w * 0.5, p.y - 42);
     }
 
     ctx.restore();
@@ -670,10 +772,10 @@
     ctx.fillStyle = "#fff";
     ctx.font = "15px Pretendard, Noto Sans KR, sans-serif";
     ctx.textAlign = "left";
-    ctx.fillText(`플레이어 수: ${remotePlayers.size + 1}`, 24, 38);
-    ctx.fillText(`좌표: (${Math.round(player.x)}, ${Math.round(player.y)})`, 24, 60);
-    ctx.fillText("←/→ 이동 | Space 가변 점프 | Enter 채팅 | 포탈: ↑", 24, 82);
-    ctx.fillText("우클릭 플레이어: 친구추가 / 1:1대화 / 미니게임 신청", 24, 102);
+    ctx.fillText(`Players ${remotePlayers.size + 1}`, 24, 38);
+    ctx.fillText(`Position: (${Math.round(player.x)}, ${Math.round(player.y)})`, 24, 60);
+    ctx.fillText(`HP ${Math.round(player.hp)} / ${player.maxHp}  |  Regen in lobby`, 24, 82);
+    ctx.fillText("Move: Left / Right  Jump: Space  Chat: Enter  Portal: Up", 24, 102);
   }
 
   function updateFromSnapshot(snapshot) {
@@ -703,6 +805,8 @@
           direction: entry.direction,
           bubble: "",
           bubbleUntil: 0,
+          hp: 100,
+          maxHp: 100,
         };
 
         existing.nickname = entry.nickname;
@@ -711,6 +815,8 @@
         existing.vx = entry.vx;
         existing.vy = entry.vy;
         existing.direction = entry.direction || 1;
+        existing.hp = Number.isFinite(entry.hp) ? entry.hp : existing.hp;
+        existing.maxHp = Number.isFinite(entry.max_hp) ? entry.max_hp : existing.maxHp;
         existing.bubble = entry.bubble || "";
         existing.bubbleUntil = entry.bubble_until || 0;
         remotePlayers.set(entry.id, existing);
@@ -785,8 +891,22 @@
     return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
   }
 
+  function stepLobbyRecovery(dt) {
+    if (!joined || player.hp >= player.maxHp) {
+      return;
+    }
+
+    const previousRoundedHp = Math.round(player.hp);
+    player.hp = Math.min(player.maxHp, player.hp + LOBBY_REGEN_PER_SECOND * dt);
+    if (Math.round(player.hp) !== previousRoundedHp) {
+      syncPlayerStatsUi();
+      savePlayerProfile();
+    }
+  }
+
   function step(dt) {
     stepMovement(dt);
+    stepLobbyRecovery(dt);
   }
 
   function render() {
@@ -804,6 +924,7 @@
     }
 
     render();
+    syncPlayerStatsUi();
     requestAnimationFrame(gameLoop);
   }
 
@@ -824,6 +945,7 @@
 
     player.id = id;
     player.nickname = profile?.nickname || nicknameInput.value.trim().slice(0, 16) || "Guest";
+    player.maxHp = Math.max(100, Number(profile?.max_hp || player.maxHp));
     myNameEl.textContent = player.nickname;
 
     if (serverWorld) {
@@ -843,7 +965,7 @@
     }
 
     startScreen.classList.remove("show");
-    addFeedLine("로비 입장 완료. Enter로 채팅, 포탈 위에서 ↑로 던전 이동.", "system");
+    addFeedLine("濡쒕퉬 ?낆옣 ?꾨즺. Enter濡?梨꾪똿, ?ы깉 ?꾩뿉???묐줈 ?섏쟾 ?대룞.", "system");
   });
 
   socket.on("disconnect", () => {
@@ -887,7 +1009,7 @@
   });
 
   socket.on("friend_added", ({ friend_id, friend_nickname }) => {
-    addFeedLine(`${friend_nickname} 님과 친구가 되었습니다.`, "system");
+    addFeedLine(`${friend_nickname} ?섍낵 移쒓뎄媛 ?섏뿀?듬땲??`, "system");
     if (!privateThreads.has(friend_id)) {
       privateThreads.set(friend_id, { nickname: friend_nickname, messages: [] });
     }
@@ -896,7 +1018,7 @@
   socket.on("private_message", (msg) => {
     const partnerId = msg.from_id === myId ? msg.target_id : msg.from_id;
     const partnerName = msg.from_id === myId ? msg.target_nickname : msg.from_nickname;
-    const author = msg.from_id === myId ? "나" : msg.from_nickname;
+    const author = msg.from_id === myId ? "Me" : msg.from_nickname;
 
     addPrivateLine(partnerId, {
       author,
@@ -915,7 +1037,7 @@
   });
 
   socket.on("minigame_invite_declined", ({ nickname }) => {
-    addFeedLine(`${nickname} 님이 미니게임 신청을 거절했습니다.`, "system");
+    addFeedLine(`${nickname} ?섏씠 誘몃땲寃뚯엫 ?좎껌??嫄곗젅?덉뒿?덈떎.`, "system");
   });
 
   socket.on("minigame_start", (payload) => {
@@ -938,7 +1060,7 @@
 
     if (!target) {
       hideContextMenu();
-      addFeedLine("플레이어 가까이에서 우클릭하면 상호작용할 수 있습니다.", "system");
+      addFeedLine("?뚮젅?댁뼱 媛源뚯씠?먯꽌 ?고겢由?븯硫??곹샇?묒슜?????덉뒿?덈떎.", "system");
       return;
     }
 
@@ -1127,13 +1249,21 @@
     render();
   };
 
+  syncPlayerStatsUi();
+
   const storedNickname = getStoredNickname();
   if (storedNickname) {
     nicknameInput.value = storedNickname;
     startScreen.classList.remove("show");
-    addFeedLine("저장된 닉네임으로 자동 입장 중...", "system");
+    addFeedLine("??λ맂 ?됰꽕?꾩쑝濡??먮룞 ?낆옣 以?..", "system");
     requestJoinLobby(storedNickname);
   }
 
+  syncPlayerStatsUi();
+
   requestAnimationFrame(gameLoop);
 })();
+
+
+
+

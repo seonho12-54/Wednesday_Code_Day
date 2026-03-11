@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
@@ -16,7 +16,6 @@
           <span>Coin <strong id="dungeon-coin">-</strong></span>
         </div>
         <div class="subpage-actions">
-          <a class="link-btn" href="/">Lobby</a>
           <a class="link-btn" href="/game">Mini Game Hub</a>
         </div>
       </header>
@@ -44,6 +43,7 @@
             </div>
           </div>
 
+          <div id="portal-prompt" class="portal-prompt hidden">Press Up to return to lobby</div>
           <div id="pickup-prompt" class="pickup-prompt hidden">Press E to pick up coins</div>
 
           <div class="dungeon-overlay action-buttons">
@@ -66,7 +66,7 @@
           <div id="dungeon-monster-list" class="monster-list"></div>
           <h2>Combat Feed</h2>
           <div id="dungeon-feed" class="feed"></div>
-          <p class="hint-text">Attacks now have live hit detection, motion changes, and coin drops.</p>
+          <p class="hint-text">A rotating return portal now sends you back to the lobby instead of a header button.</p>
           <p class="hint-text">Press E or use the button to collect coins after they land on the floor.</p>
         </aside>
       </section>

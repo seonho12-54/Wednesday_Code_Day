@@ -1,4 +1,4 @@
-(() => {
+﻿(() => {
   const canvas = document.getElementById("dungeon-canvas");
   if (!canvas) {
     return;
@@ -20,6 +20,7 @@
   const hudActionFill = document.getElementById("hud-action-fill");
   const hudActionText = document.getElementById("hud-action-text");
   const hudCoinCount = document.getElementById("hud-coin-count");
+  const portalPrompt = document.getElementById("portal-prompt");
   const pickupPrompt = document.getElementById("pickup-prompt");
   const attackZBtn = document.getElementById("attack-z-btn");
   const attackXBtn = document.getElementById("attack-x-btn");
@@ -86,6 +87,7 @@
     width: 2800,
     height: 1400,
     spawn: { x: 420, y: 520 },
+    returnPortal: { x: 150, y: 460, w: 120, h: 148, target: "/" },
     id: dungeonId,
   };
 
@@ -129,7 +131,7 @@
   };
 
   const camera = { x: 0, y: 0 };
-  const keys = { left: false, right: false, jumpHeld: false };
+  const keys = { left: false, right: false, jumpHeld: false, up: false };
   const monsters = [];
   const projectiles = [];
   const attackEffects = [];
@@ -147,6 +149,8 @@
   let prevTs = performance.now();
   let fallbackTimer = null;
   let controlHintCooldown = 0;
+  let inReturnPortalRange = false;
+  let interactQueued = false;
 
   function addFeed(text, kind = "system") {
     if (!feedEl) {
@@ -204,6 +208,33 @@
     pickupPrompt.classList.remove("hidden");
   }
 
+  function updatePortalPrompt() {
+    if (!portalPrompt) {
+      return;
+    }
+
+    if (!inReturnPortalRange || player.deadTimer > 0) {
+      portalPrompt.classList.add("hidden");
+      return;
+    }
+
+    portalPrompt.textContent = "Press Up to return to lobby";
+    portalPrompt.classList.remove("hidden");
+  }
+
+  function returnPortalRect() {
+    return {
+      left: world.returnPortal.x,
+      right: world.returnPortal.x + world.returnPortal.w,
+      top: world.returnPortal.y,
+      bottom: world.returnPortal.y + world.returnPortal.h,
+    };
+  }
+
+  function enterLobbyFromPortal() {
+    saveProfile();
+    window.location.assign(world.returnPortal.target || "/");
+  }
   function makeCard(title, lines, className) {
     const card = document.createElement("div");
     card.className = className;
@@ -228,7 +259,7 @@
       makeCard("Dungeon", [world.id, `Connection: ${connectionState}`], "status-pill"),
       makeCard("Player", [`HP ${Math.round(player.hp)} / ${player.maxHp}`, `Coins ${player.coin}`], "status-pill"),
       makeCard("Combat", [`Alive monsters ${aliveCount}`, `Ground coins ${coinDrops.length}`], "status-pill"),
-      makeCard("Controls", ["Move: Left / Right", "Jump: Space", "Attack: Z / X / C", "Pick up: E"], "status-pill"),
+      makeCard("Controls", ["Move: Left / Right", "Jump: Space", "Attack: Z / X / C", "Pick up: E", "Return portal: Up"], "status-pill"),
     ].forEach((card) => statusEl.appendChild(card));
   }
 
@@ -292,6 +323,13 @@
     world.width = Number(nextWorld.width || world.width);
     world.height = Number(nextWorld.height || world.height);
     world.spawn = { x: Number((nextWorld.spawn || {}).x || world.spawn.x), y: Number((nextWorld.spawn || {}).y || world.spawn.y) };
+    world.returnPortal = {
+      x: Number((nextWorld.returnPortal || {}).x || world.returnPortal.x),
+      y: Number((nextWorld.returnPortal || {}).y || world.returnPortal.y),
+      w: Number((nextWorld.returnPortal || {}).w || world.returnPortal.w),
+      h: Number((nextWorld.returnPortal || {}).h || world.returnPortal.h),
+      target: String((nextWorld.returnPortal || {}).target || world.returnPortal.target),
+    };
     world.id = String(nextWorld.id || world.id || dungeonId);
     rebuildPlatforms();
   }
@@ -467,6 +505,7 @@
       addFeed("You were knocked out. Respawning...");
     }
     updateHud();
+    updatePortalPrompt();
     saveProfile();
     renderStatus();
   }
@@ -513,6 +552,7 @@
     player.coin += gained;
     addFeed(`Picked up ${gained} coin${gained > 1 ? "s" : ""}.`);
     updateHud();
+    updatePortalPrompt();
     updatePickupPrompt();
     saveProfile();
     renderStatus();
@@ -616,6 +656,23 @@
       player.vy = 0;
       addFeed("Fell out of the map. Returned to spawn.");
     }
+
+    const portal = returnPortalRect();
+    const portalCenterX = (portal.left + portal.right) * 0.5;
+    const portalCenterY = (portal.top + portal.bottom) * 0.5;
+    inReturnPortalRange =
+      intersects(playerRect(), portal) ||
+      (Math.abs(player.x - portalCenterX) < 104 && Math.abs(player.y - portalCenterY) < 122);
+
+    if (interactQueued) {
+      interactQueued = false;
+      if (inReturnPortalRange) {
+        addFeed("Returning to lobby through the portal.");
+        enterLobbyFromPortal();
+        return;
+      }
+    }
+
     camera.x = clamp(player.x - canvas.width * 0.5, 0, Math.max(0, world.width - canvas.width));
     camera.y = clamp(player.y - canvas.height * 0.5, 0, Math.max(0, world.height - canvas.height));
   }
@@ -845,6 +902,45 @@
     });
   }
 
+  function drawReturnPortal(now) {
+    const portal = world.returnPortal;
+    const centerX = portal.x + portal.w * 0.5;
+    const centerY = portal.y + portal.h * 0.5;
+    const spin = now * 0.0024;
+    const pulse = 1 + Math.sin(now * 0.005) * 0.04;
+
+    ctx.save();
+    ctx.translate(centerX, centerY);
+
+    const glow = ctx.createRadialGradient(0, 0, 16, 0, 0, 88 * pulse);
+    glow.addColorStop(0, "#c7b4ffea");
+    glow.addColorStop(0.38, "#6d6dffbb");
+    glow.addColorStop(1, "#3b2f7900");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 76 * pulse, 88 * pulse, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.rotate(spin);
+    ctx.strokeStyle = "#efe9ff";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 50, 64, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.rotate(-spin * 1.7);
+    ctx.strokeStyle = "#8fe6ff";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 34, 48, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.font = "bold 14px Pretendard, Noto Sans KR, sans-serif";
+    ctx.fillText("LOBBY", 0, -84);
+    ctx.restore();
+  }
   function drawAttackEffects() {
     attackEffects.forEach((effect) => {
       const alpha = clamp(effect.life / effect.maxLife, 0, 1);
@@ -1185,6 +1281,7 @@
     ctx.save();
     ctx.translate(-camera.x, -camera.y);
     drawPlatforms();
+    drawReturnPortal(now);
     drawCoins(now);
     drawAttackEffects();
     monsters.forEach((monster, index) => drawMonster(monster, index, now));
@@ -1204,6 +1301,7 @@
     updateCoins(dt);
     updateFloatingTexts(dt);
     updateHud();
+    updatePortalPrompt();
     updatePickupPrompt();
   }
 
@@ -1269,8 +1367,10 @@
 
   addFeed("Dungeon combat loaded.");
   addFeed("Z: slash, X: projectile, C: drive, E: pick up coins.");
+  addFeed("Use the rotating portal and press Up to return to the lobby.");
   renderStatus();
   updateHud();
+  updatePortalPrompt();
   updatePickupPrompt();
 
   document.addEventListener("keydown", (event) => {
@@ -1281,6 +1381,9 @@
       keys.left = true;
     } else if (event.key === "ArrowRight") {
       keys.right = true;
+    } else if (event.key === "ArrowUp") {
+      keys.up = true;
+      interactQueued = true;
     } else if (event.key === " " || event.code === "Space") {
       keys.jumpHeld = true;
       jumpQueued = true;
@@ -1299,6 +1402,8 @@
       keys.left = false;
     } else if (event.key === "ArrowRight") {
       keys.right = false;
+    } else if (event.key === "ArrowUp") {
+      keys.up = false;
     } else if (event.key === " " || event.code === "Space") {
       keys.jumpHeld = false;
       if (player.vy < -80) {
@@ -1332,3 +1437,8 @@
 
   requestAnimationFrame(gameLoop);
 })();
+
+
+
+
+

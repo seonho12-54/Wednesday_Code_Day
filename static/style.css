@@ -623,3 +623,17 @@ button,
     bottom: 132px;
   }
 }
+
+.portal-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 144px;
+  transform: translateX(-50%);
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: #1a1450d8;
+  border: 1px solid #b8b5ff55;
+  color: #f6f2ff;
+  box-shadow: 0 12px 24px #1c154455;
+  z-index: 3;
+}
