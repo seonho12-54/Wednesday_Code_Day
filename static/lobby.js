@@ -57,6 +57,7 @@
 
   let myId = null;
   let joined = false;
+  let joinRequested = false;
   let inPortalRange = false;
   let contextTargetId = null;
 
@@ -169,6 +170,32 @@
     savePlayerProfile();
   }
 
+  function getStoredNickname() {
+    const raw = sessionStorage.getItem("player_profile");
+    if (!raw) {
+      return "";
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      const nickname = String(parsed?.nickname || "").trim();
+      return nickname.slice(0, 16);
+    } catch {
+      return "";
+    }
+  }
+
+  function requestJoinLobby(rawNickname) {
+    if (joined || joinRequested) {
+      return;
+    }
+    const nickname = String(rawNickname || "").trim().slice(0, 16);
+    if (!nickname) {
+      return;
+    }
+    joinRequested = true;
+    socket.emit("join_lobby", { nickname });
+  }
+
   function addFeedLine(text, type = "normal") {
     const line = document.createElement("div");
     line.className = `feed-line ${type}`;
@@ -247,11 +274,13 @@
     pendingInvite.fromName = fromName;
     inviteText.textContent = `${fromName} 님이 미니게임을 신청했습니다.`;
     inviteModal.classList.remove("hidden");
+    inviteModal.classList.add("show");
   }
 
   function hideInviteModal() {
     pendingInvite.fromId = null;
     pendingInvite.fromName = "";
+    inviteModal.classList.remove("show");
     inviteModal.classList.add("hidden");
   }
 
@@ -785,12 +814,13 @@
       nicknameInput.focus();
       return;
     }
-    socket.emit("join_lobby", { nickname });
+    requestJoinLobby(nickname);
   });
 
   socket.on("joined", ({ id, world: serverWorld, snapshot, profile }) => {
     myId = id;
     joined = true;
+    joinRequested = false;
 
     player.id = id;
     player.nickname = profile?.nickname || nicknameInput.value.trim().slice(0, 16) || "Guest";
@@ -814,6 +844,11 @@
 
     startScreen.classList.remove("show");
     addFeedLine("로비 입장 완료. Enter로 채팅, 포탈 위에서 ↑로 던전 이동.", "system");
+  });
+
+  socket.on("disconnect", () => {
+    joined = false;
+    joinRequested = false;
   });
 
   socket.on("state_snapshot", (snapshot) => {
@@ -885,9 +920,10 @@
 
   socket.on("minigame_start", (payload) => {
     const sessionId = payload?.session_id || "";
+    const explicitPath = payload?.game_path || "";
     sessionStorage.setItem("active_minigame_session", JSON.stringify(payload || {}));
     savePlayerProfile();
-    const targetUrl = sessionId ? `/game?session=${encodeURIComponent(sessionId)}` : "/game";
+    const targetUrl = explicitPath || (sessionId ? `/game/volley?session=${encodeURIComponent(sessionId)}` : "/game/volley");
     window.location.assign(targetUrl);
   });
 
@@ -1090,6 +1126,14 @@
     }
     render();
   };
+
+  const storedNickname = getStoredNickname();
+  if (storedNickname) {
+    nicknameInput.value = storedNickname;
+    startScreen.classList.remove("show");
+    addFeedLine("저장된 닉네임으로 자동 입장 중...", "system");
+    requestJoinLobby(storedNickname);
+  }
 
   requestAnimationFrame(gameLoop);
 })();

@@ -65,7 +65,8 @@ body {
 }
 
 #game-canvas,
-#dungeon-canvas {
+#dungeon-canvas,
+#volley-canvas {
   width: 100%;
   aspect-ratio: 16 / 9;
   display: block;
@@ -385,6 +386,17 @@ button,
   align-items: start;
 }
 
+.volley-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 12px;
+  align-items: start;
+}
+
+.volley-side-panel .feed {
+  height: 250px;
+}
+
 .tile p {
   margin: 6px 0;
   font-size: 0.92rem;
@@ -394,7 +406,8 @@ button,
 @media (max-width: 1220px) {
   .main-area,
   .subpage-content,
-  .game-layout .subpage-content {
+  .game-layout .subpage-content,
+  .volley-content {
     grid-template-columns: 1fr;
   }
 

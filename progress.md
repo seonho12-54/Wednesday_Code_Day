@@ -27,3 +27,34 @@ TODO / Suggestions for next agent:
 - 검증 2: Playwright 포탈 체크에서 `portal.in_range=true` 상태로 `ArrowUp` 입력 시 URL이 `/dungeon`으로 변경됨 확인.
 - 검증 3: 2클라이언트 Socket.IO 테스트에서 `minigame_invite -> minigame_invite_response(accepted) -> minigame_start` 양측 수신 확인.
 - 문서화: 분업용 가이드 `division.md` 생성(현재 구현 범위, 소켓 이벤트 계약, 던전/미니게임/백엔드 팀별 고려사항, 데이터 모델 권장안 정리).
+
+- 구현: `/game/volley` 신규 라우트/템플릿/클라이언트(`templates/volley.html`, `static/volley.js`) 추가. 캔버스 코트, 중앙 라켓, 벽 반사 필드, 각 진영 상단 대형 점수 숫자 UI 반영.
+- 서버 확장: `app.py`에 Volley 세션 상태머신/물리 루프 추가.
+  - 각 플레이어 10코인 베팅 잠금(`try_lock_entry_fee`) 후 경기 시작
+  - 5점 선취 시 종료
+  - 승자에게 20코인 지급(`add_coin`)
+  - 경기 중 이탈 시 상대 승 처리(`opponent_disconnect`)
+- 흐름 변경: 로비 미니게임 수락 시 `/game/volley?session=...`로 이동하도록 `static/lobby.js` 수정.
+- 저장소 확장: `PlayerRepository`에 코인 차감/지급 메서드 추가(MongoDB + in-memory fallback).
+- 스타일 확장: `static/style.css`에 volley 레이아웃/캔버스 스타일 추가.
+- 테스트: 로컬 서버(`PORT=5199`)에서 Playwright 클라이언트 실행.
+  - 명령: `node web_game_playwright_client.js --url http://127.0.0.1:5199/game/volley --iterations 2 --pause-ms 300 --screenshot-dir output/web-volley-check --click 640,360`
+  - 결과: 스크린샷/상태 JSON 생성(`output/web-volley-check/shot-0.png`, `state-0.json`).
+  - 확인: 각 진영 상단에 큰 점수(0/0) 표시, 상태 오버레이 정상.
+  - 제약: 자동 테스트는 단일 브라우저 시나리오라 2인 대전/실제 득점-정산 루프는 미검증.
+
+TODO / Suggestions for next agent:
+- 2개 클라이언트 동시 접속으로 실제 득점(5점 종료)과 코인 정산(승자 +20) E2E 검증 필요.
+- 동일 닉네임 중복 접속/세션 재접속 정책 정교화 필요(현재 닉네임 기반 매칭).
+- MongoDB 사용 시 `find_one_and_update` 동작/인덱스 상태 운영 환경에서 재검증 권장.
+
+- 버그 수정: 미니게임 초대 모달이 표시되지 않던 문제 해결. 원인=`invite-modal`에 `.show` 클래스가 빠져 `.overlay` 기본 `display:none` 유지됨. `showInviteModal`에서 `show` 추가, `hideInviteModal`에서 `show` 제거하도록 수정(`static/lobby.js`).
+
+- 밸런스 조정: `/game/volley` 플레이어 크기 2배(52x68 -> 104x136), 공 반지름 2배(26 -> 52) 반영. 서버 물리값(`app.py`)과 클라이언트 초기 렌더(`static/volley.js`) 동기화.
+
+- 기능 추가: Volley 첫 경기 시작 전 5초 카운트다운 도입. 서버 상태(`countdown`)에서 중앙 숫자 UI 표시 후 0이 되면 공 서브 시작. 이후 랠리는 기존처럼 즉시 재개.
+
+- UX 개선: 로비 복귀 시 `sessionStorage.player_profile.nickname`이 있으면 자동으로 `join_lobby` 요청하도록 변경(`static/lobby.js`). 닉네임 재입력 없이 바로 로비 재입장 가능.
+- 검증: Playwright 로비 회귀 체크(`output/web-lobby-autojoin-check`). 저장 닉네임이 없는 신규 컨텍스트에서 start 모드 정상, 콘솔 에러 파일 미생성.
+
+- 볼리 캐릭터 형태 개선: 공 토스 용이성을 위해 플레이어 충돌 판정을 직사각형 단일 AABB에서 `원형 머리 + 몸통` 합성 충돌로 변경(`app.py`). 렌더도 동일하게 머리 원형/몸통 형태로 변경(`static/volley.js`).

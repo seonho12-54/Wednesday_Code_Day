@@ -2,16 +2,19 @@ import os
 import threading
 import time
 import uuid
+import math
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO, emit
 
 try:
     from pymongo import MongoClient
+    from pymongo.collection import ReturnDocument
     from pymongo.errors import DuplicateKeyError, PyMongoError
 except Exception:  # pragma: no cover - optional in local envs without pymongo
     MongoClient = None
+    ReturnDocument = None
     DuplicateKeyError = Exception
     PyMongoError = Exception
 
@@ -20,6 +23,7 @@ class PlayerRepository:
     def __init__(self) -> None:
         self.enabled = False
         self._local_profiles: Dict[str, Dict[str, Any]] = {}
+        self._local_lock = threading.Lock()
         self.collection = None
 
         mongo_uri = os.getenv("MONGODB_URI", "").strip()
@@ -82,6 +86,73 @@ class PlayerRepository:
                 "coin": 0,
             }
         return dict(self._local_profiles[key])
+
+    def try_lock_entry_fee(self, nickname: str, fee: int) -> Dict[str, Any]:
+        fee = max(0, int(fee))
+        if fee == 0:
+            profile = self.get_or_create(nickname)
+            return {"ok": True, "profile": profile}
+
+        if self.enabled and self.collection is not None:
+            try:
+                doc = self.collection.find_one_and_update(
+                    {"nickname": nickname, "coin": {"$gte": fee}},
+                    {"$inc": {"coin": -fee}, "$set": {"updated_at": time.time()}},
+                    return_document=ReturnDocument.AFTER,
+                )
+            except PyMongoError:
+                doc = None
+            if doc is None:
+                return {"ok": False, "error": "insufficient_coin"}
+            return {"ok": True, "profile": self._normalize_profile(doc)}
+
+        key = nickname.lower()
+        with self._local_lock:
+            profile = self._local_profiles.get(key)
+            if profile is None:
+                profile = {
+                    "_id": f"local-{uuid.uuid4().hex[:10]}",
+                    "nickname": nickname,
+                    "hp": 100,
+                    "coin": 0,
+                }
+                self._local_profiles[key] = profile
+            if int(profile.get("coin", 0)) < fee:
+                return {"ok": False, "error": "insufficient_coin"}
+            profile["coin"] = int(profile.get("coin", 0)) - fee
+            return {"ok": True, "profile": dict(profile)}
+
+    def add_coin(self, nickname: str, amount: int) -> Dict[str, Any]:
+        amount = int(amount)
+        if amount == 0:
+            return {"ok": True, "profile": self.get_or_create(nickname)}
+
+        if self.enabled and self.collection is not None:
+            try:
+                doc = self.collection.find_one_and_update(
+                    {"nickname": nickname},
+                    {"$inc": {"coin": amount}, "$set": {"updated_at": time.time()}},
+                    return_document=ReturnDocument.AFTER,
+                )
+            except PyMongoError:
+                doc = None
+            if doc is None:
+                return {"ok": False, "error": "not_found"}
+            return {"ok": True, "profile": self._normalize_profile(doc)}
+
+        key = nickname.lower()
+        with self._local_lock:
+            profile = self._local_profiles.get(key)
+            if profile is None:
+                profile = {
+                    "_id": f"local-{uuid.uuid4().hex[:10]}",
+                    "nickname": nickname,
+                    "hp": 100,
+                    "coin": 0,
+                }
+                self._local_profiles[key] = profile
+            profile["coin"] = max(0, int(profile.get("coin", 0)) + amount)
+            return {"ok": True, "profile": dict(profile)}
 
 
 class DungeonMonsterRepository:
@@ -311,6 +382,39 @@ players: Dict[str, Dict[str, Any]] = {}
 state_lock = threading.Lock()
 broadcast_task = None
 pending_minigame_invites: Dict[str, Dict[str, Any]] = {}
+minigame_sessions: Dict[str, Dict[str, Any]] = {}
+volley_connections: Dict[str, Dict[str, str]] = {}
+
+VOLLEY_ENTRY_FEE = 10
+VOLLEY_WIN_SCORE = 5
+VOLLEY_POT = VOLLEY_ENTRY_FEE * 2
+VOLLEY_FIELD = {
+    "width": 2200.0,
+    "height": 1200.0,
+    "floor_y": 1100.0,
+    "racket_x": 1100.0,
+    "racket_w": 40.0,
+    "racket_h": 280.0,
+}
+VOLLEY_MOVE = {
+    "gravity": 1920.0,
+    "move_accel": 10800.0,
+    "max_run_speed": 790.0,
+    "ground_friction": 13.0,
+    "air_friction": 2.35,
+    "jump_impulse": -830.0,
+    "jump_hold_force": 2100.0,
+    "jump_hold_time": 0.18,
+    "jump_cut_multiplier": 0.48,
+}
+VOLLEY_BALL = {
+    "radius": 52.0,
+    "gravity": 1700.0,
+    "restitution": 0.91,
+    "max_speed": 1180.0,
+    "min_bounce_vy": 250.0,
+}
+volley_task = None
 
 
 def clamp_or_recenter(player: Dict[str, Any]) -> None:
@@ -424,6 +528,392 @@ def make_dungeon_snapshot(dungeon_id: str) -> Dict[str, Any]:
     }
 
 
+def _clamp(value: float, min_value: float, max_value: float) -> float:
+    return max(min_value, min(max_value, value))
+
+
+def create_volley_player(side: str, nickname: str) -> Dict[str, Any]:
+    hw = 52.0
+    hh = 68.0
+    spawn_x = 620.0 if side == "left" else 1580.0
+    return {
+        "nickname": nickname,
+        "side": side,
+        "x": spawn_x,
+        "y": VOLLEY_FIELD["floor_y"] - hh,
+        "vx": 0.0,
+        "vy": 0.0,
+        "width": hw * 2,
+        "height": hh * 2,
+        "on_ground": True,
+        "jump_holding": False,
+        "jump_hold_timer": 0.0,
+        "input": {"left": False, "right": False, "jump": False, "jump_prev": False},
+    }
+
+
+def _player_bounds(side: str, hw: float) -> Dict[str, float]:
+    if side == "left":
+        max_x = VOLLEY_FIELD["racket_x"] - (VOLLEY_FIELD["racket_w"] * 0.5) - hw - 8.0
+        return {"min_x": hw + 8.0, "max_x": max_x}
+    min_x = VOLLEY_FIELD["racket_x"] + (VOLLEY_FIELD["racket_w"] * 0.5) + hw + 8.0
+    return {"min_x": min_x, "max_x": VOLLEY_FIELD["width"] - hw - 8.0}
+
+
+def _rect_from_player(player: Dict[str, Any]) -> Dict[str, float]:
+    hw = player["width"] * 0.5
+    hh = player["height"] * 0.5
+    return {
+        "left": player["x"] - hw,
+        "right": player["x"] + hw,
+        "top": player["y"] - hh,
+        "bottom": player["y"] + hh,
+        "hw": hw,
+        "hh": hh,
+    }
+
+
+def simulate_volley_player(player: Dict[str, Any], dt: float) -> None:
+    input_state = player["input"]
+    left_pressed = bool(input_state.get("left", False))
+    right_pressed = bool(input_state.get("right", False))
+    jump_pressed = bool(input_state.get("jump", False))
+    jump_prev = bool(input_state.get("jump_prev", False))
+
+    intent = (1 if right_pressed else 0) - (1 if left_pressed else 0)
+    player["vx"] += intent * VOLLEY_MOVE["move_accel"] * dt
+
+    if intent == 0:
+        friction = VOLLEY_MOVE["ground_friction"] if player["on_ground"] else VOLLEY_MOVE["air_friction"]
+        player["vx"] *= max(0.0, 1.0 - friction * dt)
+        if abs(player["vx"]) < 2.5:
+            player["vx"] = 0.0
+
+    player["vx"] = _clamp(player["vx"], -VOLLEY_MOVE["max_run_speed"], VOLLEY_MOVE["max_run_speed"])
+
+    jump_started = jump_pressed and not jump_prev
+    jump_released = (not jump_pressed) and jump_prev
+    if jump_started and player["on_ground"]:
+        player["vy"] = VOLLEY_MOVE["jump_impulse"]
+        player["on_ground"] = False
+        player["jump_holding"] = True
+        player["jump_hold_timer"] = 0.0
+
+    if player["jump_holding"] and jump_pressed and player["jump_hold_timer"] < VOLLEY_MOVE["jump_hold_time"] and player["vy"] < 0:
+        player["vy"] -= VOLLEY_MOVE["jump_hold_force"] * dt
+        player["jump_hold_timer"] += dt
+    elif player["jump_holding"]:
+        player["jump_holding"] = False
+
+    if jump_released and player["vy"] < 0:
+        player["vy"] *= VOLLEY_MOVE["jump_cut_multiplier"]
+        player["jump_holding"] = False
+
+    player["vy"] += VOLLEY_MOVE["gravity"] * dt
+    player["vy"] = _clamp(player["vy"], -1200.0, 1500.0)
+
+    player["x"] += player["vx"] * dt
+    rect = _rect_from_player(player)
+    bounds = _player_bounds(player["side"], rect["hw"])
+    player["x"] = _clamp(player["x"], bounds["min_x"], bounds["max_x"])
+
+    player["y"] += player["vy"] * dt
+    rect = _rect_from_player(player)
+    floor_y = VOLLEY_FIELD["floor_y"] - rect["hh"]
+    ceiling_y = rect["hh"] + 4.0
+
+    player["on_ground"] = False
+    if player["y"] >= floor_y:
+        player["y"] = floor_y
+        player["vy"] = 0.0
+        player["on_ground"] = True
+        player["jump_holding"] = False
+    elif player["y"] <= ceiling_y:
+        player["y"] = ceiling_y
+        if player["vy"] < 0:
+            player["vy"] = 0.0
+
+    player["input"]["jump_prev"] = jump_pressed
+
+
+def _circle_rect_collision(cx: float, cy: float, radius: float, rect: Dict[str, float]) -> Dict[str, float]:
+    nearest_x = _clamp(cx, rect["left"], rect["right"])
+    nearest_y = _clamp(cy, rect["top"], rect["bottom"])
+    dx = cx - nearest_x
+    dy = cy - nearest_y
+    dist_sq = dx * dx + dy * dy
+    if dist_sq >= radius * radius:
+        return {"hit": 0.0}
+
+    dist = math.sqrt(dist_sq) if dist_sq > 1e-6 else 0.0
+    if dist == 0.0:
+        if abs(dx) >= abs(dy):
+            nx = 1.0 if cx > (rect["left"] + rect["right"]) * 0.5 else -1.0
+            ny = 0.0
+        else:
+            nx = 0.0
+            ny = 1.0 if cy > (rect["top"] + rect["bottom"]) * 0.5 else -1.0
+        penetration = radius
+    else:
+        nx = dx / dist
+        ny = dy / dist
+        penetration = radius - dist
+    return {"hit": 1.0, "nx": nx, "ny": ny, "penetration": penetration}
+
+
+def _circle_circle_collision(
+    ax: float,
+    ay: float,
+    ar: float,
+    bx: float,
+    by: float,
+    br: float,
+) -> Dict[str, float]:
+    dx = ax - bx
+    dy = ay - by
+    rs = ar + br
+    dist_sq = dx * dx + dy * dy
+    if dist_sq >= rs * rs:
+        return {"hit": 0.0}
+    dist = math.sqrt(dist_sq) if dist_sq > 1e-6 else 0.0
+    if dist == 0.0:
+        nx = 0.0
+        ny = -1.0
+        penetration = rs
+    else:
+        nx = dx / dist
+        ny = dy / dist
+        penetration = rs - dist
+    return {"hit": 1.0, "nx": nx, "ny": ny, "penetration": penetration}
+
+
+def _ball_player_collision(ball: Dict[str, Any], player: Dict[str, Any]) -> Dict[str, float]:
+    prect = _rect_from_player(player)
+    body_top = prect["top"] + prect["hh"] * 0.22
+    body_rect = {
+        "left": prect["left"] + prect["hw"] * 0.16,
+        "right": prect["right"] - prect["hw"] * 0.16,
+        "top": body_top,
+        "bottom": prect["bottom"],
+    }
+    head_r = prect["hw"]
+    head_cx = player["x"]
+    head_cy = prect["top"] + head_r + 2.0
+
+    candidates = [
+        _circle_rect_collision(ball["x"], ball["y"], ball["r"], body_rect),
+        _circle_circle_collision(ball["x"], ball["y"], ball["r"], head_cx, head_cy, head_r),
+    ]
+    best = {"hit": 0.0}
+    for hit in candidates:
+        if not hit.get("hit"):
+            continue
+        if not best.get("hit") or float(hit["penetration"]) > float(best.get("penetration", 0.0)):
+            best = hit
+    return best
+
+
+def _cap_ball_speed(ball: Dict[str, Any]) -> None:
+    speed = math.hypot(ball["vx"], ball["vy"])
+    max_speed = VOLLEY_BALL["max_speed"]
+    if speed > max_speed and speed > 0:
+        scale = max_speed / speed
+        ball["vx"] *= scale
+        ball["vy"] *= scale
+
+
+def reset_volley_round(
+    session: Dict[str, Any],
+    conceding_side: Optional[str] = None,
+    launch_immediately: bool = True,
+) -> None:
+    center_x = VOLLEY_FIELD["width"] * 0.5
+    spawn_x = center_x
+    if conceding_side == "left":
+        spawn_x = center_x - 180.0
+    elif conceding_side == "right":
+        spawn_x = center_x + 180.0
+    serve_dir = 1.0 if spawn_x <= center_x else -1.0
+    serve_vx = 340.0 * serve_dir
+    serve_vy = -520.0
+    session["ball"] = {
+        "x": spawn_x,
+        "y": 380.0,
+        "vx": serve_vx if launch_immediately else 0.0,
+        "vy": serve_vy if launch_immediately else 0.0,
+        "r": VOLLEY_BALL["radius"],
+    }
+    session["pending_serve"] = None if launch_immediately else {"vx": serve_vx, "vy": serve_vy}
+    session["players_state"]["left"] = create_volley_player("left", session["nick_by_side"]["left"])
+    session["players_state"]["right"] = create_volley_player("right", session["nick_by_side"]["right"])
+
+
+def _finish_volley_match(session: Dict[str, Any], winner_side: str, reason: str) -> None:
+    if session.get("settled", False):
+        return
+    winner_nickname = session["nick_by_side"][winner_side]
+    coin_result = player_repository.add_coin(winner_nickname, VOLLEY_POT)
+    winner_coin = None
+    if coin_result.get("ok"):
+        winner_coin = int(coin_result["profile"].get("coin", 0))
+
+    session["status"] = "finished"
+    session["settled"] = True
+    session["winner_side"] = winner_side
+    session["winner_nickname"] = winner_nickname
+    session["match_end_payload"] = {
+        "session_id": session["session_id"],
+        "winner_side": winner_side,
+        "winner_nickname": winner_nickname,
+        "scores": dict(session["scores"]),
+        "entry_fee": VOLLEY_ENTRY_FEE,
+        "pot": VOLLEY_POT,
+        "reason": reason,
+        "winner_coin": winner_coin,
+    }
+
+
+def simulate_volley_session(session: Dict[str, Any], dt: float) -> None:
+    if session["status"] not in {"countdown", "playing"}:
+        return
+
+    for side in ("left", "right"):
+        simulate_volley_player(session["players_state"][side], dt)
+
+    if session["status"] == "countdown":
+        remain = float(session.get("countdown_until", 0.0)) - time.time()
+        if remain <= 0.0:
+            session["status"] = "playing"
+            session["countdown_remaining"] = 0
+            pending = session.get("pending_serve")
+            if pending:
+                session["ball"]["vx"] = float(pending.get("vx", 0.0))
+                session["ball"]["vy"] = float(pending.get("vy", 0.0))
+                session["pending_serve"] = None
+        else:
+            session["countdown_remaining"] = max(1, int(math.ceil(remain)))
+        return
+
+    ball = session["ball"]
+    ball["vy"] += VOLLEY_BALL["gravity"] * dt
+    ball["x"] += ball["vx"] * dt
+    ball["y"] += ball["vy"] * dt
+    r = ball["r"]
+    restitution = VOLLEY_BALL["restitution"]
+
+    if ball["x"] - r <= 0:
+        ball["x"] = r
+        ball["vx"] = abs(ball["vx"]) * restitution
+    elif ball["x"] + r >= VOLLEY_FIELD["width"]:
+        ball["x"] = VOLLEY_FIELD["width"] - r
+        ball["vx"] = -abs(ball["vx"]) * restitution
+
+    if ball["y"] - r <= 0:
+        ball["y"] = r
+        ball["vy"] = abs(ball["vy"]) * restitution
+
+    racket_rect = {
+        "left": VOLLEY_FIELD["racket_x"] - (VOLLEY_FIELD["racket_w"] * 0.5),
+        "right": VOLLEY_FIELD["racket_x"] + (VOLLEY_FIELD["racket_w"] * 0.5),
+        "top": VOLLEY_FIELD["floor_y"] - VOLLEY_FIELD["racket_h"],
+        "bottom": VOLLEY_FIELD["floor_y"],
+    }
+    racket_hit = _circle_rect_collision(ball["x"], ball["y"], r, racket_rect)
+    if racket_hit.get("hit"):
+        ball["x"] += racket_hit["nx"] * racket_hit["penetration"]
+        ball["y"] += racket_hit["ny"] * racket_hit["penetration"]
+        vn = ball["vx"] * racket_hit["nx"] + ball["vy"] * racket_hit["ny"]
+        if vn < 0:
+            impulse = -(1.0 + restitution) * vn
+            ball["vx"] += impulse * racket_hit["nx"]
+            ball["vy"] += impulse * racket_hit["ny"]
+
+    for side in ("left", "right"):
+        player = session["players_state"][side]
+        hit = _ball_player_collision(ball, player)
+        if not hit.get("hit"):
+            continue
+        ball["x"] += hit["nx"] * hit["penetration"]
+        ball["y"] += hit["ny"] * hit["penetration"]
+        rel_vx = ball["vx"] - player["vx"]
+        rel_vy = ball["vy"] - player["vy"]
+        vn = rel_vx * hit["nx"] + rel_vy * hit["ny"]
+        if vn < 0:
+            impulse = -(1.0 + restitution) * vn
+            ball["vx"] += impulse * hit["nx"] + player["vx"] * 0.22
+            ball["vy"] += impulse * hit["ny"] + player["vy"] * 0.08
+
+    if abs(ball["vy"]) < VOLLEY_BALL["min_bounce_vy"] and ball["vy"] > 0:
+        ball["vy"] = VOLLEY_BALL["min_bounce_vy"]
+    _cap_ball_speed(ball)
+
+    if ball["y"] + r >= VOLLEY_FIELD["floor_y"]:
+        scorer = "right" if ball["x"] < VOLLEY_FIELD["racket_x"] else "left"
+        conceder = "left" if scorer == "right" else "right"
+        session["scores"][scorer] += 1
+        if session["scores"][scorer] >= VOLLEY_WIN_SCORE:
+            _finish_volley_match(session, scorer, "score_limit")
+            return
+        reset_volley_round(session, conceding_side=conceder)
+
+
+def build_volley_state_payload(session: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "session_id": session["session_id"],
+        "status": session["status"],
+        "countdown_remaining": int(session.get("countdown_remaining", 0)),
+        "countdown_seconds": int(session.get("countdown_seconds", 0)),
+        "scores": dict(session["scores"]),
+        "target_score": VOLLEY_WIN_SCORE,
+        "field": VOLLEY_FIELD,
+        "players": {
+            "left": {
+                "nickname": session["players_state"]["left"]["nickname"],
+                "x": session["players_state"]["left"]["x"],
+                "y": session["players_state"]["left"]["y"],
+                "vx": session["players_state"]["left"]["vx"],
+                "vy": session["players_state"]["left"]["vy"],
+                "w": session["players_state"]["left"]["width"],
+                "h": session["players_state"]["left"]["height"],
+            },
+            "right": {
+                "nickname": session["players_state"]["right"]["nickname"],
+                "x": session["players_state"]["right"]["x"],
+                "y": session["players_state"]["right"]["y"],
+                "vx": session["players_state"]["right"]["vx"],
+                "vy": session["players_state"]["right"]["vy"],
+                "w": session["players_state"]["right"]["width"],
+                "h": session["players_state"]["right"]["height"],
+            },
+        },
+        "ball": dict(session["ball"]),
+    }
+
+
+def run_volley_loop() -> None:
+    while True:
+        emit_queue = []
+        with state_lock:
+            for session in minigame_sessions.values():
+                if session.get("type") != "volley":
+                    continue
+
+                if session["status"] in {"countdown", "playing"}:
+                    simulate_volley_session(session, 1.0 / 60.0)
+                    emit_queue.append(("volley_state", build_volley_state_payload(session), session["session_id"]))
+
+                if session.get("match_end_payload") and not session.get("end_emitted"):
+                    emit_queue.append(("volley_match_end", dict(session["match_end_payload"]), session["session_id"]))
+                    session["end_emitted"] = True
+        for event_name, payload, room in emit_queue:
+            socketio.emit(event_name, payload, room=room)
+        socketio.sleep(1.0 / 60.0)
+
+
+def ensure_volley_loop_started() -> None:
+    global volley_task
+    if volley_task is None:
+        volley_task = socketio.start_background_task(run_volley_loop)
 @app.route("/")
 def lobby() -> str:
     return render_template("lobby.html")
@@ -437,6 +927,52 @@ def dungeon() -> str:
 @app.route("/game")
 def game() -> str:
     return render_template("game.html")
+
+
+@app.route("/game/volley")
+def game_volley() -> str:
+    return render_template("volley.html")
+
+
+@app.route("/dev/grant_coin", methods=["POST"])
+def dev_grant_coin() -> Any:
+    payload = request.get_json(silent=True) or request.form or {}
+    nickname_raw = str(payload.get("nickname", "")).strip()
+    amount_raw = payload.get("amount", 0)
+    try:
+        amount = int(amount_raw)
+    except Exception:
+        amount = 0
+
+    updated = []
+    with state_lock:
+        target_nicknames = []
+        if nickname_raw:
+            target_nicknames = [sanitize_nickname(nickname_raw)]
+        else:
+            target_nicknames = sorted({str(p.get("nickname", "")).strip() for p in players.values() if p.get("nickname")})
+
+        for nickname in target_nicknames:
+            result = player_repository.add_coin(nickname, amount)
+            if not result.get("ok"):
+                continue
+            profile = result["profile"]
+            coin = int(profile.get("coin", 0))
+            for sid, p in players.items():
+                if p.get("nickname") == nickname:
+                    p["coin"] = coin
+                    emit("system_notice", {"message": f"[DEV] 코인 지급: {nickname} +{amount}"}, room=sid)
+            updated.append({"nickname": nickname, "coin": coin})
+
+    return jsonify(
+        {
+            "ok": True,
+            "amount": amount,
+            "targets": updated,
+            "count": len(updated),
+            "note": "nickname 미지정 시 현재 접속 중인 플레이어 전체에 지급",
+        }
+    )
 
 
 @socketio.on("join_dungeon")
@@ -717,8 +1253,43 @@ def on_minigame_invite_response(data: Dict[str, Any]) -> None:
         return
 
     session_id = uuid.uuid4().hex[:10]
+    nick_by_side = {
+        "left": requester["nickname"],
+        "right": responder["nickname"],
+    }
+    minigame_sessions[session_id] = {
+        "type": "volley",
+        "session_id": session_id,
+        "status": "waiting_join",
+        "allowed_nicknames": [nick_by_side["left"], nick_by_side["right"]],
+        "nick_by_side": nick_by_side,
+        "sid_by_side": {"left": "", "right": ""},
+        "players_state": {
+            "left": create_volley_player("left", nick_by_side["left"]),
+            "right": create_volley_player("right", nick_by_side["right"]),
+        },
+        "scores": {"left": 0, "right": 0},
+        "ball": {
+            "x": VOLLEY_FIELD["width"] * 0.5,
+            "y": 380.0,
+            "vx": 320.0,
+            "vy": -520.0,
+            "r": VOLLEY_BALL["radius"],
+        },
+        "entry_fee": VOLLEY_ENTRY_FEE,
+        "target_score": VOLLEY_WIN_SCORE,
+        "countdown_seconds": 5,
+        "countdown_remaining": 0,
+        "countdown_until": 0.0,
+        "pending_serve": None,
+        "settled": False,
+        "match_end_payload": None,
+        "end_emitted": False,
+    }
+
     payload = {
         "session_id": session_id,
+        "game_path": f"/game/volley?session={session_id}",
         "players": [
             {"id": requester_id, "nickname": requester["nickname"]},
             {"id": sid, "nickname": responder["nickname"]},
@@ -728,10 +1299,157 @@ def on_minigame_invite_response(data: Dict[str, Any]) -> None:
     emit("minigame_start", payload, room=sid)
 
 
+@socketio.on("volley_join_session")
+def on_volley_join_session(data: Dict[str, Any]) -> None:
+    ensure_volley_loop_started()
+    payload = data or {}
+    session_id = str(payload.get("session_id", "")).strip()
+    nickname = sanitize_nickname(payload.get("nickname"))
+    sid = request.sid
+    if not session_id or not nickname:
+        emit("volley_error", {"message": "세션 정보가 올바르지 않습니다."})
+        return
+
+    with state_lock:
+        session = minigame_sessions.get(session_id)
+        if session is None or session.get("type") != "volley":
+            emit("volley_error", {"message": "유효하지 않은 배구 세션입니다."}, room=sid)
+            return
+
+        side = None
+        for side_key, side_nickname in session["nick_by_side"].items():
+            if side_nickname == nickname:
+                side = side_key
+                break
+        if side is None:
+            emit("volley_error", {"message": "이 세션의 참여자가 아닙니다."}, room=sid)
+            return
+
+        prev_sid = session["sid_by_side"].get(side, "")
+        if prev_sid and prev_sid != sid:
+            volley_connections.pop(prev_sid, None)
+
+        session["sid_by_side"][side] = sid
+        session["status"] = "waiting_join"
+        volley_connections[sid] = {"session_id": session_id, "side": side}
+        socketio.server.enter_room(sid, session_id, namespace="/")
+
+        connected_sides = [
+            side_key
+            for side_key in ("left", "right")
+            if session["sid_by_side"].get(side_key)
+        ]
+        both_connected = len(connected_sides) == 2
+
+        ready_to_start = False
+        if both_connected and not session.get("bets_locked", False):
+            left_nickname = session["nick_by_side"]["left"]
+            right_nickname = session["nick_by_side"]["right"]
+            left_lock = player_repository.try_lock_entry_fee(left_nickname, VOLLEY_ENTRY_FEE)
+            right_lock = player_repository.try_lock_entry_fee(right_nickname, VOLLEY_ENTRY_FEE)
+
+            if left_lock.get("ok") and right_lock.get("ok"):
+                session["bets_locked"] = True
+                session["status"] = "countdown"
+                session["scores"] = {"left": 0, "right": 0}
+                session["countdown_seconds"] = 5
+                session["countdown_until"] = time.time() + float(session["countdown_seconds"])
+                session["countdown_remaining"] = int(session["countdown_seconds"])
+                reset_volley_round(session, launch_immediately=False)
+                ready_to_start = True
+            else:
+                if left_lock.get("ok"):
+                    player_repository.add_coin(left_nickname, VOLLEY_ENTRY_FEE)
+                if right_lock.get("ok"):
+                    player_repository.add_coin(right_nickname, VOLLEY_ENTRY_FEE)
+                session["status"] = "cancelled"
+                emit(
+                    "volley_error",
+                    {"message": "두 플레이어 모두 10코인이 있어야 시작할 수 있습니다."},
+                    room=session_id,
+                )
+                return
+        elif both_connected and session.get("bets_locked", False):
+            ready_to_start = session["status"] in {"countdown", "playing", "finished"}
+
+        emit(
+            "volley_joined",
+            {
+                "session_id": session_id,
+                "side": side,
+                "nickname": nickname,
+                "entry_fee": VOLLEY_ENTRY_FEE,
+                "target_score": VOLLEY_WIN_SCORE,
+                "connected_players": len(connected_sides),
+                "status": session["status"],
+            },
+            room=sid,
+        )
+
+        if ready_to_start:
+            emit(
+                "volley_start",
+                {
+                    "session_id": session_id,
+                    "entry_fee": VOLLEY_ENTRY_FEE,
+                    "target_score": VOLLEY_WIN_SCORE,
+                    "pot": VOLLEY_POT,
+                    "status": session["status"],
+                    "countdown_seconds": int(session.get("countdown_seconds", 0)),
+                    "countdown_remaining": int(session.get("countdown_remaining", 0)),
+                    "scores": dict(session["scores"]),
+                    "side_nicknames": dict(session["nick_by_side"]),
+                },
+                room=session_id,
+            )
+        else:
+            emit(
+                "volley_waiting",
+                {
+                    "session_id": session_id,
+                    "connected_players": len(connected_sides),
+                },
+                room=session_id,
+            )
+
+
+@socketio.on("volley_input")
+def on_volley_input(data: Dict[str, Any]) -> None:
+    sid = request.sid
+    payload = data or {}
+    with state_lock:
+        connection = volley_connections.get(sid)
+        if connection is None:
+            return
+        session = minigame_sessions.get(connection["session_id"])
+        if session is None or session.get("type") != "volley":
+            return
+        if session.get("status") not in {"playing", "waiting_join"}:
+            return
+        side = connection["side"]
+        player = session["players_state"][side]
+        player["input"]["left"] = bool(payload.get("left", False))
+        player["input"]["right"] = bool(payload.get("right", False))
+        player["input"]["jump"] = bool(payload.get("jump", False))
+
+
 @socketio.on("disconnect")
 def on_disconnect() -> None:
     sid = request.sid
+    volley_end_emit = None
     with state_lock:
+        connection = volley_connections.pop(sid, None)
+        if connection is not None:
+            session = minigame_sessions.get(connection["session_id"])
+            if session and session.get("type") == "volley":
+                side = connection["side"]
+                session["sid_by_side"][side] = ""
+                if session.get("status") == "playing" and not session.get("settled"):
+                    winner_side = "right" if side == "left" else "left"
+                    _finish_volley_match(session, winner_side, "opponent_disconnect")
+                    if session.get("match_end_payload"):
+                        volley_end_emit = (dict(session["match_end_payload"]), session["session_id"])
+
         leaving = players.pop(sid, None)
         pending_minigame_invites.pop(sid, None)
 
@@ -744,7 +1462,14 @@ def on_disconnect() -> None:
             pending_minigame_invites.pop(target_id, None)
 
     if leaving is None:
+        if volley_end_emit is not None:
+            payload, room_id = volley_end_emit
+            emit("volley_match_end", payload, room=room_id)
         return
+
+    if volley_end_emit is not None:
+        payload, room_id = volley_end_emit
+        emit("volley_match_end", payload, room=room_id)
 
     emit("player_left", {"id": sid}, broadcast=True)
     emit(

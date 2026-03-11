@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Volley Mini Game</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body class="subpage-body">
+    <main class="subpage-layout volley-layout">
+      <header class="subpage-header">
+        <h1>Volley Duel</h1>
+        <div class="subpage-stats">
+          <span>닉네임: <strong id="volley-name">-</strong></span>
+          <span>HP: <strong id="volley-hp">-</strong></span>
+          <span>Coin: <strong id="volley-coin">-</strong></span>
+          <span>세션: <strong id="volley-session">-</strong></span>
+          <span>내 진영: <strong id="volley-side">-</strong></span>
+        </div>
+        <div class="subpage-actions">
+          <a class="link-btn" href="/">로비 복귀</a>
+        </div>
+      </header>
+
+      <section class="volley-content">
+        <section class="subpage-panel">
+          <canvas id="volley-canvas" width="1280" height="720"></canvas>
+        </section>
+
+        <aside class="subpage-panel volley-side-panel">
+          <h2>규칙</h2>
+          <p class="hint-text">좌/우 이동: ← / →</p>
+          <p class="hint-text">점프: Space (가변 점프)</p>
+          <p class="hint-text">입장 시 각자 10코인 베팅, 5점 선취 승리</p>
+          <p class="hint-text">승자는 총 20코인 획득</p>
+          <h2>진행 로그</h2>
+          <div id="volley-feed" class="feed short-feed"></div>
+        </aside>
+      </section>
+    </main>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='volley.js') }}"></script>
+  </body>
+</html>
